@@ -1,0 +1,380 @@
+---
+title: "Insécurité alimentaire au Niger"
+output:
+  html_notebook: 
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    theme: united 
+  word_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+
+# Chargement des packages
+suppressMessages(library(tidyverse))
+suppressMessages(library(labelled))
+suppressMessages(library(gtsummary))
+# library(patchwork)
+# library(cartography)
+suppressMessages(library(mapsf))
+# library(tmap)
+# library(sf)
+# library(nnet)
+
+#.....................................................................................................................
+# Chargement des bases de donnees contenant les variables à mobiliser pour le calcul des indicateurs
+#.....................................................................................................................
+data2020 <- haven::read_dta("data2020_treat.dta")
+names(data2020) <- str_replace_all(str_to_lower(names(data2020)),pattern = "id_","")
+
+data2019 <- haven::read_dta("data2019_treat.dta")
+names(data2019) <- str_replace_all(str_to_lower(names(data2019)),pattern = "id_","")
+
+data2018 <- haven::read_dta("data2018_treat.dta")
+names(data2018) <- str_replace_all(str_to_lower(names(data2018)),pattern = "id_","")
+
+data_map2018_reg <- readxl::read_excel("dataset/data_niger.xlsx",sheet = 1) %>% filter(year==2018)
+data_map2018_dept <- readxl::read_excel("dataset/data_niger.xlsx",sheet = 2)
+#.....................................................................................................................
+# Calcul des indicateurs d'interet
+#.....................................................................................................................
+
+# data2020 %>% look_for(details = TRUE)
+# data2020 %>% look_for("region",details = TRUE)
+df_reg2020 <- data2020 %>%
+  group_by(region) %>%
+  summarise(total=n(),
+            insecuriteAlimentaire=sum(insecurite_alimentaire),
+            inondation = sum(inondations),
+            secheresse=sum(secheresse),
+            insecuriteVol = sum(insecurite_vol),
+            annee=2020) %>%
+  ungroup() %>%
+  mutate(across(insecuriteAlimentaire:insecuriteVol, ~ round(100*.x/total,1)))
+
+df_dept2020 <- data2020 %>%
+  group_by(dept) %>%
+  summarise(total=n(),
+            insecuriteAlimentaire=sum(insecurite_alimentaire),
+            inondation = sum(inondations),
+            secheresse=sum(secheresse),
+            insecuriteVol = sum(insecurite_vol),
+            annee=2020) %>%
+  ungroup() %>%
+  mutate(across(insecuriteAlimentaire:insecuriteVol, ~ round(100*.x/total,1)))
+
+df_reg2019 <- data2019 %>%
+  group_by(region) %>%
+  summarise(total=n(),
+            insecuriteAlimentaire=sum(insecurite_alimentaire),
+            inondation = sum(inondations),
+            secheresse=sum(secheresse),
+            insecuriteVol = sum(insecurite_vol),
+            taillemen = mean(taille),
+            annee=2019) %>%
+  ungroup() %>%
+  mutate(across(insecuriteAlimentaire:insecuriteVol, ~ round(100*.x/total,1)))
+
+df_dept2019 <- data2019 %>%
+  group_by(dept) %>%
+  summarise(total=n(),
+            insecuriteAlimentaire=sum(insecurite_alimentaire),
+            inondation = sum(inondations),
+            secheresse=sum(secheresse),
+            insecuriteVol = sum(insecurite_vol),
+            taillemen = mean(taille),
+            annee=2019) %>%
+  ungroup() %>%
+  mutate(across(insecuriteAlimentaire:insecuriteVol, ~ round(100*.x/total,1)))
+
+#.....................................................................................................................
+# Charhement des fonds de carte....
+#.....................................................................................................................
+# Region =NER_adm01
+# foreign::read.dbf("hdx_data.humdata.org/ner_adm01_feb2018/NER_adm01_feb2018.dbf")
+niger_region <- read_sf("hdx_data.humdata.org/ner_adm01_feb2018/NER_adm01_feb2018.shp")
+
+# Departement=NER_adm02
+#foreign::read.dbf("hdx_data.humdata.org/ner_adm02_feb2018/NER_adm02_feb2018.dbf")
+niger_dept <- read_sf("hdx_data.humdata.org/ner_adm02_feb2018/NER_adm02_feb2018.shp")
+niger_road <- read_sf("hdx_data.humdata.org/Roads/NER_Road.shp")
+
+# niger <- read_sf("map/Diva-GIS_shapefile/admin/NER_adm0.shp")
+# # foreign::read.dbf("map/Diva-GIS_shapefile/admin/NER_adm1.dbf")
+# niger_region <- read_sf("map/Diva-GIS_shapefile/admin/NER_adm1.shp")
+# # foreign::read.dbf("map/Diva-GIS_shapefile/admin/NER_adm2.dbf")
+# niger_dept <- read_sf("map/Diva-GIS_shapefile/admin/NER_adm2.shp")
+# niger_road <- read_sf("NER_roads.shp")
+# niger_river <-  read_sf("NER_water_lines_dcw.shp")
+# niger_lake  <-  read_sf("NER_water_areas_dcw.shp")
+
+#....................................................................................................................
+# Ajout des indicateurs dans les differentes cartes, notamment niger_region & niger_dept pour obtenir map_region & 
+# map_dept...
+#....................................................................................................................
+
+map_region <- st_make_valid(niger_region %>% 
+  left_join(data_map2018_reg, #%>% select(-total,-annee)
+            by = c("OBJECTID"="id_region")))
+
+map_dept <- st_make_valid(niger_dept %>% 
+  left_join(data_map2018_dept,#%>% select(-total,-annee)
+            by = c("OBJECTID"="id_departement")))
+
+# #Avec tmap
+# tm_shape(map_dept) + 
+#   tm_fill("insecuriteAlimentaire") + 
+#   tm_borders()
+
+```
+
+# Cartes thématiques
+
+## Proportion de la population en situation d'insécurité sévère par département
+
+Le graphique suivant illustre la distribution spatiale de la population victime d'insécurité alimentaire sévère au Niger en 2018. Les départements les plus touchés sont ceux de N'Guigmi (16.7%),  de Bilma (16.0%), de Tillia (12.6%) et de Ouallam (12.5%). Ceux les moins concernés par une insécurité alimemtaire sévère sont Aderbissinat (0%), Bermo (0%), Damagaram Takaya (0%), Dosso (0%) et dans une moindre mesure Dioundiou (0.3%) et Aguié(0.4%).
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+
+#...................................................................................................................
+# Test de production de quelques cartes....
+#...................................................................................................................
+#
+mf_map(x=map_dept, var = "prop_severe", type = "choro",
+       pal="Burg",breaks = "kmeans",nbreaks = 5,
+       border = "gray",leg_title="% de la population en insécurité sévère") #,leg_pos=NA
+mf_layout(title = "2018 : Insécurité alimentaire",
+          credits = "INS-NIGER et al.\nSources: EVIAM 2018",
+          arrow = FALSE)
+  
+```
+
+## Différentes cartes thématiques par région
+
+```{r carte_niger, echo=FALSE, warning=FALSE, message=FALSE}
+# hcl.pals("sequential")
+
+# layout(t(2:2))
+par(mfrow = c(2, 2))
+
+# Insecurite alimentaire
+mf_theme("default", tab = FALSE, font = 4)
+mf_map(x=map_region, var = "prop_insecuriteAlimentaire", type = "choro",
+       breaks = "kmeans",nbreaks = 3,pal="Dark Mint",
+       border = "gray",leg_title="% de la population en insécurité sévère") #,leg_pos=NA
+mf_layout(title = "2018 : Insécurité alimentaire",
+          credits = "INS-NIGER et al.\nSources: EVIAM 2018",
+          arrow = FALSE)
+# Inondation
+mf_theme("default", tab = FALSE, font = 4)
+mf_map(x=map_region, var = "prop_inondation", type = "choro",
+       breaks = "kmeans",nbreaks = 3,pal="Blues",
+       border = "gray",leg_title="% ménages ayant souffert d'inondations") #,leg_pos=NA
+mf_layout(title = "2018 : Inondation",
+          credits = "INS-NIGER et al.\nSources: EVIAM 2018",
+          arrow = FALSE)
+# Secheresse
+mf_theme("default", tab = FALSE, font = 4)
+mf_map(x=map_region, var = "prop_secheresse", type = "choro",
+       breaks = "kmeans",nbreaks = 3,pal="Magenta",
+       border = "gray",leg_title="% ménages ayant souffert de sécheresse")#,leg_pos=NA
+mf_layout(title = "2018 : Irrégularité des pluies",
+          credits = "INS-NIGER et al.\nSources: EVIAM 2018",
+          arrow = FALSE)
+
+# Secheresse
+mf_theme("default", tab = FALSE, font = 4)
+mf_map(x=map_region, var = "prop_insecuriteVol", type = "choro",
+       breaks = "kmeans",nbreaks = 3,pal="Peach",
+       border = "gray",leg_title="% ménages ménages victime de vols")#,leg_pos=NA
+mf_layout(title = "2018 : Insécurité/Vols",
+          credits = "INS-NIGER et al.\nSources: EVIAM 2018",
+          arrow = FALSE)
+par(mfrow = c(1, 1))
+# # Avec mapsf mise a jour de cartography
+# mapsf::mf_map(x = niger_dept, col = "orange",border = "white")
+# tm_shape(map_dept) + tm_fill("insecuriteAlimentaire") + tm_borders() + tm_shape(niger_road)+tm_lines(col="brown")
+# # Avec ggplot...
+# ggplot() +
+#   # geom_sf(data=niger,map=niger,aes(map_id=ID_1),color='black',fill='wheat',linetype=2) +
+#   geom_sf(data=niger_region) +
+#   geom_sf(data=niger_dept) +
+#   geom_sf(data = niger_road, color = "brown4") +
+#   ggtitle("TEST..") + #colour=steelblue
+#   theme_bw()
+
+```
+
+
+<br/>
+
+
+# Modéles de régression logistique
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+
+# Configuration du moteur gtsummary
+# suppressMessages(theme_gtsummary_journal("lancet")) #Option : jama,lancet,nejm,qjecon
+suppressMessages(theme_gtsummary_compact())
+suppressMessages(theme_gtsummary_language(language = "fr", decimal.mark = ",", big.mark = " "))
+
+dbase <- list(data_2019=data2019,data_2020=data2020)
+vardep <- "insecurite_alimentaire"
+vars_control <- list(data_2019=c("autochtone","sex_cm","nivins_cm","nivie","taille_menage","region"),
+                     data_2020=c("autochtone","nivie","taille_menage","region"))
+
+vars_explicative <- c("inondations","secheresse","baisse2recolte","climat_recolte",
+                      "prix_denree","prix_transport","prix_loyer","prix_intrant","cout2vie",
+                      "chomage1","chomage2","sans_emploi","baisse2revenu","maladie","remb_dettes",
+                      "sante_revenu","insecurite_vol")
+
+vars_foonote <- c("Odds ratio issus d'un modèle de régression logistique multivarié prenant en compte,comme variables indépendantes, en plus du choc, le statut du ménage (autochtone ou non), le sexe du chef du ménage (CM), le niveau d'instruction du CM, le niveau de vie du ménage, la taille du ménage et la région de résidence.\n","Le modèle de régression logistique multivarié de 2020 est ajusté sur les mêmes variables que celui de 2019 à l'exception du sexe et du niveau d'instruction du chef de ménage.\n")
+
+names(vars_foonote) <- names(dbase)
+results <- list()
+tabs <- list()
+
+for(var_annee in names(dbase)){
+  results[[var_annee]] <- list()
+  tabs[[var_annee]] <- NA
+  for(varname in vars_explicative){
+    
+    # Modelisation
+    expr <- as.formula(paste(vardep,
+                             paste(c(varname,vars_control[[var_annee]]),collapse = " + "),
+                             sep = " ~ "))
+    results[[c(var_annee,varname)]] <- glm(expr,#insecurite_alimentaire ~.,
+                                           data=dbase[[var_annee]] %>%
+                                             select(one_of(c(vardep,varname,vars_control[[var_annee]]))) %>%
+                                             to_factor(),
+                                           family=binomial(logit))
+    # La mise en page des resultats
+    suppressMessages(
+      tmp <- results[[c(var_annee,varname)]] %>%
+         tbl_regression(include=varname,
+                 show_single_row = all_dichotomous(),
+                 add_estimate_to_reference_rows = TRUE,
+                 exponentiate=TRUE) %>%
+        add_global_p(keep = TRUE)
+    )
+    
+    if(var_annee==names(dbase)[1] & varname==vars_explicative[1]){
+      suppressMessages(
+        tmp <- tmp %>% modify_header(update=list(label ~ "**Choc**"))
+      )
+    }
+    
+    if(varname==vars_explicative[1]){
+      expr <- sprintf('estimate ~ "%s"',vars_foonote[var_annee])
+      suppressMessages(
+        tmp <- tmp %>% modify_footnote(update=list(as.formula(expr)))
+      )
+    }
+    
+    # Fusion des modeles choc par choc
+    if(is.na(tabs[[var_annee]])){
+      tabs[[var_annee]] <- tmp
+      # class(tabs[[var_annee]]) <- class(tmp)
+    }else{
+      tabs[[var_annee]] <- tbl_stack(list(tabs[[var_annee]],tmp),quiet = TRUE)
+    }
+    
+  }
+}  
+
+```
+  
+<br/>  
+
+Le tableau ci-dessous met en exergue les liens existants entre les chocs et la malnutrition au Niger dans les années 2019 et 2020.  
+
+En 2019, les ménages ayant remboursés leurs dettes (OR=3.44,p<0.001), étant victimes de de chômage de longue durée(OR=3.20,p<0.001), de perte d'emplois (OR=2.50,p<0.001) ou dans une moindre mesure d'augmentation des prix des denrées alimentaires (OR=1.96,p<0.001) étaient plus à risque d'insuffisance alimentaire. En 2020, ce sont prioritairement les ménages victimes de perte d'emplois (OR=5.86,p<0.001), d'augmentation du prix du loyer (OR=3.79,p<0.001) ayant remboursés leurs dettes (OR=3.72,p<0.001), victimes de chômage de longue durée (OR=3.61,p<0.001), d'inondations (OR=2.30,p<0.001) ou dans une moindre mesure d'irrégularité des pluies (OR=1.98,p<0.001) qui étaient plus sujettes à une malnutrition.
+
+
+Nonobstant ces faits, l'association entre la malnutrition et, d'une part, la baisse de revenu et d'autre part, les dépenses de santé exceptionnelles peut s'expliquer par le coût relativement élevé des denrées alimentaires et le pouvoir d'achat des ménages. Lequel pouvoir diminuerait sous l'effet d'une baisse de revenu ou d'une dépense de santé exceptionnelle. Par ailleurs, les inondations et l'irrégularité des pluies favoriseraient la rareté des denrées alimentaires sur les marchés locaux et de facto l'augmentation de leur prix de vente. En effet, le risque pour les ménages ayant des faibles revenus et victimes de dépenses de santé (OR<sub>2019</sub>=1.70; OR<sub>2020</sub>=2.88,p<0.001 pour les deux années); ceux victimes de conditions climatiques désastreuses et ayant un accès difficile aux denrées alimentaires (OR<sub>2019</sub>=1.63; OR<sub>2020</sub>=2.17,p<0.001 pour les deux années) ainsi que ceux victimes de la cherté de la vie (OR<sub>2019</sub>=1.91; OR<sub>2020</sub>=1.55,p<0.001 pour les deux années) ont un risque relativement important de malnutrition.
+
+
+<br/>  
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+# La fusion des resultats
+suppressMessages( 
+  # tab <- tbl_merge( list(tab2,tab1), tab_spanner = c("2019", "2020"))
+  tab <- tbl_merge( list(tabs[["data_2019"]],tabs[["data_2020"]]), 
+                    tab_spanner = c("2019", "2020"))
+)
+
+# Affichage
+tab %>% 
+  as_gt() %>%
+  gt::tab_header("Tableau 1. Liens associatifs entre chocs et malnutrition au Niger",subtitle = "")
+  
+
+#Liste des variables modifiables dans gtsummary => show_header_names(tab)
+# # reset gtsummary themes
+# reset_gtsummary_theme()
+
+```
+<br/>
+
+> `Attention:` Les résultats de 2020 ne concerne que 5 régions sur 7 régions.
+
+# Pyramides des âges du Niger
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+
+# Import des donnees
+db <- read.csv2("dataset/PopulationAgeSex_UN_NIGER.csv")
+
+# Traitement des données
+names(db) <- str_to_lower(names(db))
+db <- db %>% filter(sex!="Both") %>%
+  mutate(age = factor(age, levels = c("0-4", "5-9", "10-14", "15-19", "20-24", "25-29", "30-34", 
+                                      "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65-69",
+                                      "70-74", "75-79", "80-84", "85-89", "90-94", "95-99","100+")),
+         sex = factor(ifelse(sex=="Female","Femme","Homme"),levels=c("Femme","Homme"))) %>%
+  pivot_longer(cols=starts_with("y"),names_to = "year", values_to = "population") %>%
+  mutate(year=str_trim(str_replace_all(year,"y","")),
+         year=factor(year,levels = str_sort(unique(year))),
+         population = strtoi(str_replace_all(str_trim(population)," ","")), 
+         population=ifelse(sex=="Homme",-1*population,population),
+         alpha_value=year)
+  
+
+# Production de la pyramide
+ggplot() +
+  theme_bw() +
+  theme(plot.caption=element_text(face="bold")) +
+  geom_bar(
+    data=filter(db,year == '2030'),
+    aes(x = age, y = population, fill = sex, group=year,alpha=alpha_value),
+    stat = "identity",width = 0.9) +
+   geom_bar(
+    data=filter(db,year == '2020'),
+    aes(x = age, y = population, fill = sex, group=year,alpha=alpha_value),
+    stat = "identity",width = 0.7) +
+  geom_bar(
+    data=filter(db,year == '2010'),
+    aes(x = age, y = population, fill = sex, group=year,alpha=alpha_value),
+    stat = "identity",width = 0.5) +
+  coord_flip() +
+  scale_fill_manual(values=c('#6D1C68','#273871')) +
+  geom_hline(yintercept = 0) +
+  scale_y_continuous(breaks = seq(-3500, 3500, 700),
+                     labels = paste0(as.character(abs(seq(-3500, 3500, 700))), "")) +
+  scale_alpha_manual(values = c(0.3,0.7,1), breaks = c('2030', '2020','2010')) +
+  labs(x="",y="Population en milliers",fill="",alpha="",
+       caption = "Source : World Population Prospects 2019.")
+
+```
+
+<br/>
