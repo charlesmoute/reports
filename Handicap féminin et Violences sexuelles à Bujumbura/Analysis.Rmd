@@ -1,0 +1,883 @@
+---
+title: 'Handicap féminin et Violences sexuelles à Bujumbura: une analyse sociodémographique
+  du vécu et des risques en santé de reproduction'
+date: 'Dernière révision : `r format(Sys.time(), "%A %d %B %Y")`'
+output:
+  word_document: default
+  html_notebook: default
+  pdf_document: default
+---
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+# Chargement des librairies utilitaires
+# library(summarytools)
+library(FactoMineR)
+library(explor)
+library(finalfit)
+library(gtsummary) 
+library(gt)
+#library(dplyr)
+library(labelled)
+library(tidyverse)
+
+# Base de donnees appretees pour carole
+dbase <- read_csv("HandiSSR4Carole_2107150517.csv")
+dbase <- dbase[,-1]
+
+# Base d'origine
+df <- read_csv2("HandiSSR_main.csv")
+
+# Base biographique grossesse non désiree
+db <- read_csv("pregnancy.csv")
+
+# Base relative aux violences sexuelles
+dbviol <- read_csv("sexviol.csv")
+dbviol <- dbviol %>% 
+  group_by(ident) %>% 
+  mutate(nbviol=n()) %>% 
+  filter(ordviol==1) %>%
+  select(ident,firstviolage=startviol,nbviol) %>%
+  data.frame()
+
+# Base preoccupation
+dbpreoc <- read_csv("ident.csv") %>%
+  select(ident,mpreoc=mpreoc_0) %>%
+  mutate(foodinsecurity= as.numeric(mpreoc=="Très préoccupé (1)")) %>% #foodinsecurity a l'âge de 10 ans
+  select(ident,foodinsecurity)
+
+# Population cible
+dbase <- dbase %>% filter(disabearly!=1)
+
+```
+
+
+### Recodage des variables utilitaires
+
+```{r}
+
+# Ajout des donnees sur les violences sexuelles
+dbase <- merge(dbase,dbviol,by = "ident",all.x = TRUE)
+dbase$nbviol[which(is.na(dbase$nbviol))] <- 0
+
+# Ajout des donnees sur le niveau d'insecurity alimentaire a l'age de 10 ans
+dbase <- merge(dbase,dbpreoc,by = "ident",all.x = TRUE)
+
+# Ajout des variables relatives aux echanges sur la sexualite ne concerne que ceux ayant eu une rapport
+# sexuel confere questinnaire..
+dbase <- merge(dbase,
+                df %>% select(ident,sextalkany,sextalkparents,sextalksiblings,
+                              sextalkfamother,sextalkfriends,sextalkpartner),
+                by = "ident",all.x = TRUE)
+
+# Correction des eventuelles incoherences...
+varlist <- c("sextalkany","sextalkparents","sextalksiblings","sextalkfamother","sextalkfriends",
+                 "sextalkpartner")
+for(varname in varlist){
+  dbase[which(dbase$anysex==1 & is.na(dbase[,varname])),varname] <- 0
+  if(varname!="sextalkany")
+    dbase$sextalkany[which(dbase$sextalkany==0 & dbase[,varname]==1)] <- 1
+}
+
+# Liste des variables disponibles dans la base d'origine
+print(sort(names(dbase)))
+
+#Groupe d'age 
+varlist <- c("15-24ans","25-34ans","35-49ans")
+dbase$grpage <- with(dbase,case_when(
+  age>=15 & age<=24 ~ 1L,
+  age>=25 & age<=34 ~ 2L,
+  age>=35 & age<=49 ~ 3L,
+  TRUE ~ NA_integer_
+))
+dbase$grpage <- factor(varlist[dbase$grpage],levels=varlist)
+  
+# Niveau d'instruction : educ, momeduc, dadeduc
+# dbase <- merge(dbase,
+#                df %>% select(ident,educ),
+#                by = "ident",
+#                all.x = TRUE)
+# unique(dbase$educ)
+varlist <- c("< Primaire","Primaire","Secondaire","Secondaire","Supérieur")
+dbase$educ3 <- factor(varlist[dbase$educ],levels = varlist[-4])
+
+varlist <- c("< Primaire","Primaire","Secondaire","Supérieur")
+dbase$momeduc <- factor(varlist[dbase$momeduc],levels = varlist)
+dbase$dadeduc <- factor(varlist[dbase$dadeduc],levels = varlist)
+
+# Sévérité du handicap : disabseverity
+varlist <- c("PT","Modérée", "Sévère")
+dbase$disabseverity <- factor(varlist[dbase$disabseverity+1],levels = varlist)
+
+dbase$disabmoderate <- NA
+dbase$disabmoderate[which(dbase$disabseverity=="PT")] <- 0
+dbase$disabmoderate[which(dbase$disabseverity=="Modérée")] <- 1
+
+dbase$disabsevere <- NA
+dbase$disabsevere[which(dbase$disabseverity=="PT")] <- 0
+dbase$disabsevere[which(dbase$disabseverity=="Sévère")] <- 1
+
+# Statut du handicap : disab
+varlist <- c("PT","PH")
+dbase$pt <- as.numeric(dbase$disab==0)
+
+dbase$disabcat <- factor(varlist[dbase$disab+1],levels=rev(varlist))
+var_label(dbase$disab) <- "Personne handicapée"
+
+
+#Type de handicap: disabvisual, disabhearing, disabloco, disabintel
+dbase$disabvisual2 <- dbase$disabvisual
+dbase$disabvisual2[which(dbase$disabvisual==0 & dbase$disab==1)] <- NA
+
+dbase$disabhearing2 <- dbase$disabhearing
+dbase$disabhearing2[which(dbase$disabhearing==0 & dbase$disab==1)] <- NA
+
+dbase$disabloco2 <- dbase$disabloco
+dbase$disabloco2[which(dbase$disabloco==0 & dbase$disab==1)] <- NA
+
+dbase$disabintel2 <- dbase$disabintel
+dbase$disabintel2[which(dbase$disabintel==0 & dbase$disab==1)] <- NA
+
+#Niveau de vie du ménage :Index richesses foyer
+# Decoupage en quantile
+print( quantile(dbase$ses))
+
+varlist <- c("Premier quartile","Second quartile","Troisième quartile","Quatrième quartile")
+dbase$sescat <- cut(dbase$ses,breaks = quantile(dbase$ses),include.lowest = TRUE)
+unique(dbase$sescat)
+dbase$sescat <- fct_recode(dbase$sescat,
+                           "Premier quartile"="[-0.768,-0.56]",
+                           "Second quartile"="(-0.56,-0.316]",
+                           "Troisième quartile"="(-0.316,0.331]",
+                           "Quatrième quartile"="(0.331,5]")
+
+# Activité : activity
+print(unique(dbase$activity))
+varlist <- c("Etudiant","Activité formelle", "Activité informelle","Sans activité","Autre")
+dbase$activity2 <- with(dbase,case_when(
+  activity %in% c(7) ~ 1L,
+  activity %in% c(1,2) ~ 2L,
+  activity %in% c(3,4,5) ~ 3L,
+  activity %in% c(6,8,9,10) ~ 4L,
+  activity %in% c(11) ~ 5L,
+  TRUE ~ NA_integer_
+))
+dbase$activity2 <- factor(varlist[dbase$activity2],levels=varlist)
+
+varlist <- c("Inconnu","Proche connaissance", "Membre de la famille")
+dbase$firstsexpartner2 <- with(dbase,case_when(
+  firstsexpartner %in% c(4,6,7) ~ 1L,
+  firstsexpartner %in% c(1,2,3) ~ 2L,
+  firstsexpartner %in% c(5) ~ 3L,
+  TRUE ~ NA_integer_
+))
+dbase$firstsexpartner2 <- factor(varlist[dbase$firstsexpartner2],levels = varlist)
+
+# Relation de longue durée: anyrellong
+dbase <- merge(dbase,
+               df %>% select(ident,anyrellong),
+               by = "ident",
+               all.x = TRUE)
+
+dbase <- merge(dbase,
+               df %>% select(ident, one_of(sprintf("pfmethoduse%d",c(1:12)))),
+               by="ident",
+               all.x = TRUE)
+dbase$pfmethoduse <- as.numeric(dbase$pfmethoduse1 | dbase$pfmethoduse2 | 
+                                  dbase$pfmethoduse3 | dbase$pfmethoduse4 | 
+                                  dbase$pfmethoduse5 | dbase$pfmethoduse6 | 
+                                  dbase$pfmethoduse7 | dbase$pfmethoduse8 | 
+                                  dbase$pfmethoduse9 | dbase$pfmethoduse10 | 
+                                  dbase$pfmethoduse11 | dbase$pfmethoduse12)
+
+# Nombre d'enfants
+dbase <- merge(dbase,
+               df %>% select(ident,numbaby),
+               by = "ident",
+               all.x = TRUE)
+
+unique(dbase$numbaby)
+range(dbase$numbaby, na.rm = TRUE)
+varlist <- c("0","1-2","3-4","5+")
+dbase$numbaby2 <- with(dbase,case_when(
+  numbaby == 0 ~ 1L,
+  numbaby >=1 & numbaby<=2 ~ 2L,
+  numbaby >=3 & numbaby<=4 ~ 3L,
+  numbaby >=5 & numbaby<=13 ~ 4L,
+  TRUE ~ 1L # NA=0 
+))
+dbase$numbaby2 <- factor(varlist[dbase$numbaby2],levels = varlist)
+
+# grossesse non désirée:
+varlist <- c("Pas du tout","Vous vouliez un enfant mais plus tard")
+idlist <- as.character((db %>% filter(wishpreg %in% varlist) %>% select(ident) %>% distinct())$ident)
+
+# dbase$unwantedpregnancy <- NA
+# dbase$unwantedpregnancy[which(dbase$anysex==1)] <- 0L
+dbase$unwantedpregnancy <- 0L
+dbase$unwantedpregnancy[which(dbase$ident %in% idlist)] <- 1L
+
+# Attouchement non désiré
+dbase$abuse2 <- dbase$abuse
+dbase$abuse2[which(is.na(dbase$abuse2))] <- 0
+
+# Rapport sexuel forcé
+dbase$sexviol2 <- dbase$viol
+dbase$sexviol2[which(is.na(dbase$sexviol2))] <- 0
+
+# Initiation sexuelle par un viol
+dbase$firstsexassess2 <- as.numeric(!is.na(dbase$firstsexassess))
+
+addmargins(with(dbase %>% filter(sexviol2==1),table(firstviolage,disabcat,useNA = "ifany")),margin = 2)
+#6 individus ayant été victimes de violence sexuelle n'ont pas d'âge declarees (1 PH & 5 PT).
+# imputation à la moyenne selon le statut du handicap
+tab <- dbase %>% 
+  filter(!is.na(firstviolage)) %>% 
+  group_by(disabcat) %>% 
+  summarise(ageMean=mean(firstviolage))
+print(tab)
+
+dbase$firstviolage[which(dbase$sexviol2==0)] <- NA
+dbase$firstviolage[which(dbase$disabcat=="PH" & is.na(dbase$firstviolage))] <- round(tab$ageMean[1])
+dbase$firstviolage[which(dbase$disabcat=="PT" & is.na(dbase$firstviolage))] <- round(tab$ageMean[2])
+
+# Verification de la correction a ete appliquee
+addmargins(with(dbase %>% filter(sexviol2==1),table(firstviolage,disabcat,useNA = "ifany")),margin = 2)
+
+# Age a la premier violence sexuelle : verification
+
+# Variable dependante : Violence sexuelle
+dbase$vardep <- as.numeric(dbase$abuse | dbase$viol)
+dbase$vardep[which(is.na(dbase$vardep))] <- 0
+
+# Multipartenariat sexuelle
+dbase$anymulti[which(is.na(dbase$anymulti) & (dbase$vardep==1 | dbase$anysex==1)) ] <- 0
+
+dbase$firstsexcondomyorn[which(is.na(dbase$firstsexcondomyorn))] <- 0 
+dbase$hivtestres[which(is.na(dbase$hivtestres))]  <- 0
+
+# Restriction de participation (psdiff)
+# Social participation restriction was defined as a participation score >12
+dbase$psdiff2 <- dbase$psdiff # Sauvegarde
+dbase$psdiff <- as.numeric(dbase$psdiff2>12)
+dbase$psdiff[which(is.na(dbase$psdiff))] <- 0
+varlist <- c("No_psdiff","psdiff")
+dbase$psdiff <- factor(varlist[dbase$psdiff+1],levels = varlist)
+
+# Dichotmisation de la réseau social (closed)
+# Social support network = Number of friends or family members who could provide help to the participant if needed => Low social support: 1 versus >1
+dbase$closed2 <- dbase$closed # Sauvegarde
+dbase$closed <- as.numeric(dbase$closed2<=1)
+dbase$closed[which(is.na(dbase$closed))] <- 0
+varlist <- c("high_closed","low_closed")
+dbase$closed <- factor(varlist[dbase$closed+1],levels = varlist)
+rm(varlist)
+
+
+# Dichotomisation de la variable capitale sociale (capsoc)
+# Premier quartile (low) versus le reste (high)
+dbase$capsoc2 <- dbase$capsoc # Sauvegarde
+dbase$capsoc <- cut(dbase$capsoc2,breaks = quantile(dbase$capsoc2),include.lowest = TRUE)
+dbase$capsoc <- as.numeric(as.numeric(dbase$capsoc)==1)
+varlist <- c("high_capsoc","low_capsoc")
+dbase$capsoc <- factor(varlist[dbase$capsoc+1],levels = varlist)
+rm(varlist)
+
+dbase$baraidecat[which(is.na(dbase$baraidecat))] <- 0
+dbase$barattitudecat[which(is.na(dbase$barattitudecat))] <- 0
+dbase$barhealthcat[which(is.na(dbase$barhealthcat))] <- 0
+dbase$barinfocat[which(is.na(dbase$barinfocat))] <- 0
+
+attr(dbase$grpage,"label") <- "Groupe d'âge"
+attr(dbase$educ3,"label") <- "Niveau d'instruction"
+attr(dbase$momeduc,"label") <- "Niveau d'instruction de la mère"
+attr(dbase$dadeduc,"label") <- "Niveau d'instruction de la père"
+attr(dbase$disabseverity,"label") <- "Sévérité de la limitation"
+attr(dbase$disabmoderate,"label") <- "Handicap modéré"
+attr(dbase$disabsevere,"label") <- "Handicap sévère"
+attr(dbase$pt,"label") <- "Personne non-handicapée"
+attr(dbase$disab,"label") <- "Personne handicapée"
+attr(dbase$disabcat,"label") <- "Statut du handicap"
+attr(dbase$disabvisual2,"label") <- "Handicap visuel"
+attr(dbase$disabintel2,"label") <- "Handicap intellectuel/mental"
+attr(dbase$disabloco2,"label") <- "Handicap moteur"
+attr(dbase$disabhearing2,"label") <- "Handicap auditif"
+attr(dbase$sescat,"label") <- "Niveau de vie du ménage"
+attr(dbase$activity2,"label") <- "Situation professionnelle"
+# Réseau social :closed
+attr(dbase$closed,"label") <- "Réseau social"
+attr(dbase$closed2,"label") <- "Réseau social"
+# Participation sociale :psdiff
+attr(dbase$psdiff,"label") <- "Participation sociale"
+attr(dbase$psdiff2,"label") <- "Participation sociale"
+# Capital social : capsoc 
+attr(dbase$capsoc,"label") <- "Capital social" 
+attr(dbase$capsoc2,"label") <- "Capital social" 
+# Age au premier rapport sexuel: firstsexage
+attr(dbase$firstsexage,"label") <- "Age au premier rapport sexuel"
+# Relation avec le premier partenaire sexuel: firstsexpartner
+attr(dbase$firstsexpartner,"label") <- "Relation avec le premier partenaire sexuel"
+attr(dbase$firstsexpartner2,"label") <- "Relation avec le premier partenaire sexuel"
+# utilisation du préservatif au premier rapport sexuel:  firstsexcondomyorn
+attr(dbase$firstsexcondomyorn,"label") <- "Utilisation du préservatif au premier rapport sexuel"
+attr(dbase$anyrellong,"label") <- "Relation de longue durée"
+attr(dbase$anyrco,"label") <- "Relations occasionnelles"
+attr(dbase$sextransac,"label") <- "Relation sexuelle transactionnelle"
+attr(dbase$sexwork,"label") <- "Prostitution"
+attr(dbase$fpanymethodyorn,"label") <- "Connaissance d’une méthode de contraception"
+attr(dbase$pfmethoduse,"label") <- "Utilisation d’une méthode de contraception"
+attr(dbase$numbaby2,"label") <- "Nombre d’enfants"
+#Barrières environnementales
+attr(dbase$bartransportcat,"label") <- "Difficultés de transport"
+attr(dbase$barhealthcat,"label") <- "Difficultés d'accès aux services de santé"
+attr(dbase$barattitudecat,"label") <- "Difficultés en lien avec attitude des autres"
+attr(dbase$baraidecat,"label") <- "Difficultés à disposer d'une aide pour les tâches quotidienne"
+attr(dbase$barinfocat,"label") <- "Difficultés d'accès à l'information"
+attr(dbase$unwantedpregnancy,"label") <- "Grossesse non désirée"
+# Test VIH: hivtestres
+attr(dbase$hivtestres,"label") <- "Test VIH"
+attr(dbase$abuse2,"label") <- "Attouchement non désiré"
+attr(dbase$sexviol2,"label") <- "Rapport sexuel forcé"
+attr(dbase$firstsexassess2,"label") <- "Initiation sexuelle par un viol"
+attr(dbase$vardep,"label") <- "Violence sexuelle"
+attr(dbase$firstsexage, "label") <- "Age au premier rapport sexuel"
+attr(dbase$anymulti,"label") <- "Multi partenariat sexuel"
+# Echange sur la sexualite
+attr(dbase$sextalkany,"label") <- "Echange sur la sexualité"
+attr(dbase$sextalkparents,"label") <- "Avec les parents"
+attr(dbase$sextalksiblings,"label") <- "Avec les frères et sœurs"
+attr(dbase$sextalkfamother,"label") <- "Avec les autres membres de la famille"
+attr(dbase$sextalkfriends,"label") <- "Avec les amis"
+attr(dbase$sextalkpartner,"label") <- "Avec le partenaire intime"
+
+# Age au premier rapport sexuel force (viol)
+attr(dbase$firstviolage,"label") <- "Age au 1er viol"
+# Nombre d'episodes de viol (viol)
+attr(dbase$nbviol,"label") <- "Nombre d’épisode de viol "
+
+varlist <- c("None","Violence sexuelle")
+dbase$vardep2 <- factor(varlist[dbase$vardep+1],levels = varlist)
+attr(dbase$vardep2,"label") <- "Violence sexuelle"
+
+dbase$teenager <- as.numeric(dbase$grpage=="15-24ans")
+attr(dbase$teenager,"label") <- "Adolescent"
+
+dbase$nb2enft <- as.numeric(dbase$numbaby>=2)
+dbase$nb2enft[is.na(dbase$nb2enft)] <- 0 
+attr(dbase$nb2enft,"label") <- "2 enfants ou plus"
+
+#Dichotmisation d'interet
+dbase$nivins_aucun <- as.numeric(dbase$educ3=="< Primaire")
+attr(dbase$nivins_aucun,"label") <- "Niveau d'instruction : moins que primaire"
+
+dbase$nivins_secondairePlus <- as.numeric(dbase$educ3 %in% c("Secondaire","Supérieur"))
+attr(dbase$nivins_secondairePlus,"label") <- "Niveau d'instruction : secondaire ou plus"
+
+dbase$sansActivite <- as.numeric(dbase$activity2=="Sans activité")
+attr(dbase$sansActivite,"label") <- "Sans activité/emploi"
+
+attr(dbase$family,"label") <- "Confiage avant l'âge de 10 ans"
+```
+
+### Analyse Bivariée
+#### Distribution de la population d'étude par quelques caractérisiques selon le statut de handicap
+
+<br/>
+Globalement les personnes handicapées déclarent plus de violence sexuelle que leurs homologues non handicapés (25% contre 12%, p<0.001). En effet, elles sont plus susceptibles d'attouchement non désiré (p=0.087) et de rapport sexuel forcé (p=0.002) que leurs homologues sans handicap. Au regard de tes effectifs relativement faibles, je te recommande de considérer le seuil de significativité statistique à 10%.
+
+> Attention, bien que la distribution du nombre d'episode est statistiquement différentes selon le statut du handicap, la difference pour une nombre d'episodeégale à 2 ne l'est pas (p-value=0.122), mais pour un nombre d'episode égale à 1, p-value<0.001. Autrement dit, le commentaire suivant : 3.4% de PH declarent 2 episodes de viol contre 1% de PT est vrai mais pas generalisable à l'ensemble des PH et PT vivant au Cameorun...
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+explanatory <- c("vardep","abuse2","sexviol2","nbviol","firstviolage","firstsexassess2")
+
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory)))
+
+db %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              missing="ifany",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+# # Test pour nbviol=1
+# tab <- matrix(c(34, 14, 147-34, 297-14), 
+#               nrow = 2,
+#               dimnames =list(c("PH", "PT"),c("Victime", "Non victime")))
+# fisher.test(tab)
+# rm(tab)
+# #p-value<0.001
+
+# Test pour nbviol=2
+# tab <- matrix(c(5, 3, 147-5, 297-3), 
+#               nrow = 2,
+#               dimnames =list(c("PH", "PT"),c("Victime", "Non victime")))
+# fisher.test(tab)
+# rm(tab)
+# p-value=0.122
+
+```
+
+<br/>
+`Bien que moindre,` chez les personnes handicapées que chez celles non handicapées, l'initiation sexuelle par un viol est fréquente chez les personnes non handicapées. En effet, plus de la moitié (58%) des femmes de notre échantillon déclare avoir été victime d'une violence sexuelle. La première violence sexuelle survient chez les PH à 18 ans contre 17 ans chez les PT (p<0.001). 
+
+***
+
+#### Distribution de la population d'étude par statut, type et sévérité de la linmitation fonctionnelle selon le risque ou non de violence sexuelle
+
+L'analyse par type et sévérité du handicap révéle que les femmes avec des difficultés auditives ou visuelle, ainsi que celles avec des limitations fonctionnelles modérées déclarent des violences sexuelles autant que leurs homologues sans handicap. Par contre, celles avec des difficultés morices (21% contre 12%, p=0.065) cognitives (33% contre 12%, p<0.001) et/ou des limitations fonctionnelles graves (25% contre 12%, p<0.001) déclarent plus de violence sexuelle que leurs homologues sans handicap respectivement.
+
+```{r echo=FALSE, message=FALSE}
+
+explanatory <- c("pt","disab","disabloco2","disabhearing2","disabvisual2",
+                 "disabintel2","disabmoderate","disabsevere")
+dependent <- "vardep2"
+db <- dbase %>% select(all_of(c(dependent,explanatory)))
+
+tab <- db %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=vardep2,
+              percent="row",
+              missing="no",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+tab
+
+```
+<br/>
+
+> `Attention ! > ` Dans ton échantillon, les limitations fonctionnelles graves (handicap sévère) concernent `r sprintf("%.01f%%",100*135/147)` des personnes handicapées. Aussi, je te recommande de ne pas conduire des analyses par sévèrité du handicap.
+
+***NB:*** Toutes les p-value sont issues de la comparaison entre personnes handicapées et personnes non-handicapées; exception faite de la première ligne qui est l'inverse et est donnée à titre d'information sur la prévalence des violences sexuelles chez les personnes non handicapées.
+
+***
+
+#### Distribution de la population victime de violence sexuelle par groupe d’âge et nombre d'enfants selon le statut du handicap
+
+<br/>
+Ton hypothèse sur les adolescents n'est pas vérifiée. En effet, il est vrai que les personnes handicapées de 15-24 ans rapportent plus de violence sexuelle que leurs homologues sans handicap (54% contre 43%) toutefois pour une p-value de 0.3 qui correspond à 30% de chance de se tromper.
+
+
+```{r echo=FALSE, message=FALSE}
+
+explanatory <- c("grpage","teenager","numbaby2","nb2enft")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep")))
+
+db %>%
+  filter(vardep==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="no",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+
+```
+
+<br/>
+`NB :` Pour le nombre d'enfants,j'ai testé différente combinaison, il s'avére que pour deux enfants et plus, les femmes handicapées déclarent moins de violence sexuelle que leurs homologues sans handicap (22% contre 48%, p=0.08). Ce résultat devrait être mis en relation avec les difficultés qu'ont les femmes handicapées à contracter des relations de longue durée propice à la survenue d'une grossesse.
+
+
+***
+
+#### Distribution de la population victime de violence sexuelle par niveau d'instruction selon le statut de handicap
+
+<br/>
+Les femmes n'ayant pas de niveau d'instruction formelle ou ayant un niveau d'instruction moins que primaire sont plus susceptibles d'être victimes de violences sexuelles que leurs homologues sans handicap (41% contre 20%,p=0.059). Ce résultat peut trouver une explication dans la théorie de la société mondiale qui stupule que l'éducation influence le risque de violence sexuelle en modifiant l'acceptation par les femmes de la violence du partenaire. Ainsi, les femmes handicapées étant plus nombreuses que leurs homologues sans handicap à avoir un niveau d'instruction faible seraient également plus susceptibles de violence sexuelle [...] 
+
+```{r echo=FALSE, message=FALSE}
+
+explanatory <- c("educ3","nivins_aucun", "nivins_secondairePlus")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep")))
+
+db %>%
+  filter(vardep==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="no",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+
+<br/>
+**NB : **La tendance inverse est observée pour celle ayant un niveau d'instruction secondaire ou plus,les femmes sans handicap declarent plus de violence sexuelle que leurs homologues handicapées (60% contre 32%, p=0.019) [Trouver une explication ou ne presenter que les résultats indiquant un faible niveau d'instruction ...]
+
+***
+
+#### Distribution de la population victime de violence sexuelle par niveau du ménage selon le statut de handicap
+
+> Pas de difference significative (p=0.6) dans les déclarations de violence sexuelle entre les personnes handicapées et leurs homologues non handicapés selon le niveau de vie du ménage. J'ai également testé chaque modaliteeé idnividuellement.
+
+```{r echo=FALSE, message=FALSE}
+
+explanatory <- c("sescat")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep")))
+
+db %>%
+  filter(vardep==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="no",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+
+***
+
+#### Distribution de la population victime de violence sexuelle par statut professionnel selon le statut de handicap
+
+> La situation professionnelle ne différe pas significative selon le statut de handicap (p=0.11).
+
+```{r echo=FALSE, message=FALSE}
+
+explanatory <- c("activity2","sansActivite")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep")))
+
+db %>%
+  filter(vardep==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="no",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+<br/>
+
+Toutefois, au seuil de significativité statistique de 10%, les personnes handicapées sans emploi sont plus susceptibles d'être victimes de violence sexuelle que leurs homologues non handicapés (54% contre 34%, p=0.092).
+
+***
+
+#### Distribution de la population victime de violence sexuelle par quelques caractéristiques selon le statut de handicap
+
+> Aucune différence statistiquement significative au seuil de 10% n'a été identifiée entre les femmes handicapées et leurs homologues non-handicapés en ce qui concerne le réseau social (p=0.8) et dans une moindre mesure pour les difficultés de transport (p=0.1).
+
+```{r echo=FALSE,message=FALSE}
+
+explanatory <- c("closed","closed2","psdiff","psdiff2","capsoc","capsoc2","bartransportcat","barinfocat",
+                 "barhealthcat","barattitudecat","barinfocat")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep")))
+
+db %>%
+  filter(vardep==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="no",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+<br>
+Globalement les personnes handicapées ont plus de diffcultés de participation sociale (p<0.001), moins de capital social (p=0.05), plus de difficultés d'accés à l'information (p=0.002), aux services de santé (p=0.08) et avec les attitudes des autres (p<0.001).
+
+***
+
+#### Distribution de la population victime de violence sexuelle par niveau d'instruction des parents selon le statut de handicap
+
+> Aucune différence statistiquement significative dans la déclaration des violences sexuelles entre les femmes handicapées et leurs homologues non handicapés par niveau d'instruction de la mère (p=0.6) et du père (p=0.7).
+
+```{r echo=FALSE,message=FALSE}
+
+explanatory <- c("momeduc","dadeduc")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep")))
+
+db %>%
+  filter(vardep==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="ifany",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+
+<br/>
+
+**Pour moi cette analyse devrait être supprimée ...**
+
+***
+
+#### Distribution de la population victime de violence sexuelle par caractéristiques de la vie sexuelle selon le statut de handicap
+
+> Le tableau ci-dessous ne concerne que les personnes ayant déjà eu un rapport sexuel. Aucune différence statistique significative en matiére de déclaration de violence sexuelle n'a été observée chez les personnes victimes de violence sexuelle entre les femmes handicapées et leurs homologues non handicapées, notamment en ce qui concerne le multipartenariat sexuel (p=0.7), les relations occasionnelles (p=0.4), la prostitution (p=0.3), les relations sexuelles transactionnelles (p=0.1) et l'âge au premier rapport sexuel (p=0.9). 
+
+```{r echo=FALSE,message=FALSE}
+
+explanatory <- c("anyrellong","anymulti","anyrco","firstsexage","firstsexpartner2","sexwork","sextransac")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep","anysex")))
+
+db %>%
+  filter(vardep==1 & anysex==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="ifany",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+# fisher.test(matrix(c(12,4,24-12,21-4),nrow = 2,dimnames = list(c("PH","PT"),c("Victime","Non victime"))))
+# Premier partenaire sexuel = Inconnu (p-value=0.05955)
+
+# fisher.test(matrix(c(10,17,24-10,21-17),nrow = 2,dimnames = list(c("PH","PT"),c("Victime","Non victime"))))
+# Premier partenaire sexuel = Proche connaissance (p-value=0.01378)
+
+# fisher.test(matrix(c(2,0,24-2,21-0),nrow = 2,dimnames = list(c("PH","PT"),c("Victime","Non victime"))))
+# Premier partenaire sexuel = Membre de la famille (p-value=0.4909)
+
+
+```
+<br/>
+
+Globalement, les personnes handicapées déclarent moins de relation de longue durée que leurs homologues non handicapées (50% contre 86%, p=0.011).Toutefois, elles déclarent plus souvent que leurs homologues non handicapées d'avoir eu le premier relation sexuelle avec un inconnu (50% contre 19%, p=0.06). 
+
+**NB** Les personnes handicapées déclarent moins souvent que leurs homologues non handicapées avoir eu un premier rapport sexuel avec une proche connaissance (42% contre 81%, p=0.014).
+
+***
+
+#### Distribution de la population victime de violence sexuelle par sources d'information en matière de sexualité selon le statut de handicap
+
+> Le tableau ci-dessous ne concerne que les personnes ayant déjà eu un rapport sexuel. Aucune différence statistique significative n'a été observée chez les personnes victimes de violence sexuelle entre les femmes handicapées et leurs homologues non handicapées, notamment en ce qui concerne les échanges sur la sexualité avec les parents (p=0.7), les frères et soeurs (p=0.2), les autres membres de la familles (p=0.5) et le partenaire intime (p=0.11)
+
+```{r echo=FALSE,message=FALSE}
+
+explanatory <- c("sextalkany","sextalkparents","sextalksiblings","sextalkfamother","sextalkfriends",
+                 "sextalkpartner")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep","anysex")))
+
+db %>%
+  filter(vardep==1 & anysex==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="ifany",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+<br/>
+
+Globalamenent, les personnes handicapées déclarent avoir moins eu d'échange sur la sexualité (une éducation sexuelle) que leurs homologues non handicapés (29% contre 100%, p=0.05). Toutefois, la moitié d'entre-eux indique avoir un échange à propos avec des amis (50% contre 76%, p=0.071).
+
+**NB** : Est-ce pertinent de traitrer de ces questions pour des personnes agressées sexuellement ? En effet, c'est comme si ces personnes avaient prémidité d'être violé .. Cett hypothèse est encore plus perceptible en ce qui concerne les échanges sur la sexualité avec le partenaire intime qui pourrait être le violeur .. En fait, on ignore si cet échange a eu lieu avant ou après la violence sexuelle... 
+
+**Je recommande de supprimer l'analyse ci-dessus... ou alors d'interpréter ceci dans le cadre plus général de l'activité sexuelle c'est dans ce sens que le tableau suivant est proposé ...** 
+
+```{r echo=FALSE,message=FALSE}
+
+explanatory <- c("sextalkany","sextalkparents","sextalksiblings","sextalkfamother","sextalkfriends",
+                 "sextalkpartner")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep","anysex")))
+
+db %>%
+  filter(anysex==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="ifany",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+<br/>
+Parmi ceux ayant déjà une relation sexuelle, les personnes handicapées sont moins susceptibles d'avoir eu des échanges sur la sexualité (93% contre 100%,p<0.001). Toutefois, plus de la moitié déclare avoir eu des échanges sur la sexualité avec leurs amis (65%), tandis que moins de 4 personnes handicapées sur 10 (39%) déclarent avoir discuté des questions de sexualité avec leurs partenaires intimes. Aucune différence statistiquement différente entre PH et PT n'a été observée en ce qui concerne les échanges sur la sexualité avec les parents (p=0.4), les frères et soeurs (p=0.3) ainsi qu'avec les autres membres de la famille (p=0.6).
+
+***
+
+#### Distribution de la population victime de violence sexuelle par caractéristiques de la vie reproductive selon le statut de handicap
+
+> Globalement, aucune statistiquement différence dans les déclarations de violences sexuelles entre les femmes handicapées et leurs homologues non handicapés en ce qui concerne l'utilisation d'une méthode de contraception (p=0.5), l'utilisation du préservatif au premier rapport sexuel (p=0.6), la survenue d'une grossesse non désirée (p=0.2) et le recours à un test du VIH (p=0.7)
+
+```{r echo=FALSE,message=FALSE}
+
+explanatory <- c("fpanymethodyorn","pfmethoduse","firstsexcondomyorn","unwantedpregnancy","hivtestres")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep")))
+
+db %>%
+  filter(vardep==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="ifany",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+
+<br/>
+**NB** Je me questionne sur la pertinence de cette analyse consécutivement à la population cible, à moins de generaliser l'analyse à ceux ayant déjà eu une relation sexuelle sans distinction sur le statut en matière de violence sexuelle.
+
+Toutefois, les femmes handicapées sont moins nombreuses que leurs homologues non handicapés à déclarer la connaissance d'une méthode contraceptive (65% contre 89%, p=0.018).
+
+<br/>
+**A toutes fins utiles, voici le tableau sur l'ensemble des personnes ayant deja eu un rapport sexuel. Je te laisse le soin de l'interpréter si cela t'interesse**
+
+```{r echo=FALSE,message=FALSE}
+
+explanatory <- c("fpanymethodyorn","pfmethoduse","firstsexcondomyorn","unwantedpregnancy","hivtestres")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"anysex")))
+
+db %>%
+  filter(anysex==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="ifany",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+<br/>
+Ce qui est notable ici, parmi les individus déclarant avoir connaissance d'une méthode de contraception, les PH sont moins susceptibles d'utiliser une méthode contraceptive (53% contre 72%, p=0.001). Toutefois, les PH ayant déjà eu une relation sexuelle, sont plus susceptibles de recourir à un test de VIH que leurs homologues non handicapés (9% contre 4%, p=0.094).
+
+***
+
+#### Distribution de la population victime de violence sexuelle par staut de cohabitation selon le statut du handicap
+
+<br/>
+
+> Aucune différence significative n'est observée en matiére de déclaration de violence sexuelle chez les personnes handicapées confiées avant l'âge de 10 ans et leurs homologues non handicapés (p=0.9).
+
+```{r echo=FALSE,message=FALSE}
+
+explanatory <- c("family")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep")))
+
+db %>%
+  filter(vardep==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="ifany",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+<br/>
+
+***
+
+#### Distribution de la population victime de violence sexuelle par niveau de preoccupation selon le statut du handicap
+
+<br/>
+
+> Aucune différence significative n'est observée en matiére de déclaration de violence sexuelle chez les personnes handicapées victimes d'insécurité alimentaire à l'âge de 10 ans et leurs homologues non handicapés (p>0.9).
+
+
+```{r echo=FALSE,message=FALSE}
+
+explanatory <- c("foodinsecurity")
+dependent <- "disabcat"
+db <- dbase %>% select(all_of(c(dependent,explanatory,"vardep")))
+
+db %>%
+  filter(vardep==1) %>%
+  select(all_of(c(dependent,explanatory))) %>%
+  tbl_summary(by=disabcat,
+              percent="column",
+              missing="ifany",
+              missing_text = "(Valeur manquante)")  %>% 
+  add_overall() %>% add_p() 
+
+```
+
+
+### II. Profil des femmes victimes de violence sexuelles en 
+
+```{r echo=FALSE,message=FALSE}
+varlist <- c("disabcat","educ3","sescat","activity2","disabseverity","grpage","numbaby2",
+             "vardep","disabvisual2","disabintel2","disabloco2","disabhearing2",
+             "bartransportcat","barinfocat","barhealthcat","barattitudecat","family",
+             "anyrellong","closed","psdiff","capsoc")
+
+dbtmp <- dbase %>% filter(vardep==1) %>% select(one_of(varlist))
+names(dbtmp) <- c("disab","educ","sescat","activity","disabseverity","grpage","numbaby",
+                  "viol","disabvisual","disabintel","disabloco","disabhearing",
+                  "bartransport","barinfo","barhealth","barattitude","fosterage",
+                  "anyrellong","closed","psdiff","capsoc")
+
+
+varlist <-c("viol","disabvisual","disabintel","disabloco","disabhearing","bartransport",
+            "barinfo","barhealth","barattitude","fosterage","anyrellong")
+for(varname in varlist){
+  dbtmp[which(is.na(dbtmp[,varname])),varname] <- 0
+  subvarlist <- c(sprintf("No_%s",varname),str_to_title(varname))
+  dbtmp[,varname] <- factor(subvarlist[dbtmp[,varname]+1],levels = subvarlist)
+}
+
+db.mca <- dbtmp %>% select(-viol)
+res.mca <- MCA(db.mca,quali.sup = c(5,8,9,10,11),graph = FALSE)
+
+```
+
+
+ 
+
+```{r echo=FALSE,message=FALSE}
+#### Analyse des correspondances multiples chez les femmes handicapées
+
+# varlist <- c("educ3","sescat","activity2","disabseverity","grpage","numbaby2",
+#              "vardep","disabvisual2","disabintel2","disabloco2","disabhearing2",
+#              "bartransportcat","barinfocat","barhealthcat","barattitudecat","family",
+#              "anyrellong","closed2","psdiff2","capsoc2")
+# dbtmp <- dbase %>% filter(disab==1 & vardep==1) %>% select(one_of(varlist))
+# names(dbtmp) <- c("educ","sescat","activity","disabseverity","grpage","numbaby",
+#                   "viol","disabvisual","disabintel","disabloco","disabhearing",
+#                   "bartransportcat","barinfocat","barhealthcat","barattitudecat","fosterage",
+#                   "anyrellong","closed","psdiff","capsoc")
+# 
+# varlist <-c("viol","disabvisual","disabintel","disabloco","disabhearing","bartransportcat",
+#             "barinfocat","barhealthcat","barattitudecat","fosterage","anyrellong")
+# for(varname in varlist){
+#   subvarlist <- c(sprintf("No_%s",varname),str_to_title(varname))
+#   dbtmp[,varname] <- factor(subvarlist[dbtmp[,varname]+1],levels = subvarlist)
+# }
+# 
+# db.ph <- dbtmp
+# ph.mca <- MCA(db.ph,quali.sup=c(4,8,9,10,11),quanti.sup =18:20,graph = FALSE)
+```
+
+
+```{r echo=FALSE,message=FALSE}
+# #### Analyse des correspondances multiples chez les femmes non handicapées
+# varlist <- c("educ3","sescat","activity2","grpage","numbaby2",
+#              "vardep","bartransportcat","barinfocat","barhealthcat",
+#              "barattitudecat","family","anyrellong","closed2","psdiff2","capsoc2")
+# dbtmp <- dbase %>% filter(disab==0 & vardep==1) %>% select(one_of(varlist))
+# names(dbtmp) <- c("educ","sescat","activity","grpage","numbaby",
+#                   "viol","bartransportcat","barinfocat","barhealthcat","barattitudecat",
+#                   "fosterage","anyrellong","closed","psdiff","capsoc")
+# 
+# varlist <- c("viol","bartransportcat","barinfocat","barhealthcat","barattitudecat","fosterage","anyrellong")
+# for(varname in varlist){
+#   subvarlist <- c(sprintf("No_%s",varname),str_to_title(varname))
+#   dbtmp[,varname] <- factor(subvarlist[dbtmp[,varname]+1],levels = subvarlist)
+# }
+# 
+# db.pt <- dbtmp
+# pt.mca <- MCA(dbtmp,quanti.sup =13:15,graph = FALSE)
+```
+
+
+***
+
