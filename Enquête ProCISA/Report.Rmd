@@ -1,0 +1,523 @@
+---
+title: 'Rapport ProCISA : `r format(Sys.time(), "%F")`'
+output:
+  html_notebook:
+    toc: yes
+    toc_depth: 2
+    number_sections: yes
+    theme: united
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    df_print: paged
+---
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+
+library(tidyverse)
+suppressMessages(library(flextable))
+library(gtsummary)
+library(openxlsx)
+suppressMessages(library(lubridate))
+#strptime / strftime
+
+set_flextable_defaults(fonts_ignore = TRUE)
+#..................................................................................................................
+# Chargement des bases de donnees
+#..................................................................................................................
+
+# configuration
+params <- list(
+  Adamawa = list(start_date=ymd("2021-12-06")), #Pilote :06/12/2021- Demarrage le 07/12/2021
+  Ouest = list(start_date=ymd("2021-12-04")) #date de demarrage ouest
+)
+#07
+
+# Bases de donnees entreprises
+varlist <- c("interview__key","interview__id","region","village",
+             "id_check_interviewer","name_check_interviewer","id_ent", "Date",
+             "Firm_consent","int_cons","ent_name", "gender", "age", "email", "phone",
+             "focusvc_1","focusvc_2","focusvc_3")
+# data_entreprises <- haven::read_dta("dataset/entreprises_pilote.dta") %>% select(one_of(varlist)) %>%
+#   bind_rows(haven::read_dta("dataset/entreprises_v03.dta") %>% select(one_of(varlist))) %>%
+#   bind_rows(haven::read_dta("dataset/entreprises_v04.dta") %>% select(one_of(varlist))) %>%
+#   labelled::to_factor()
+
+data_entreprises <- haven::read_dta("dataset/entreprises_v03.dta") %>% select(one_of(varlist)) %>%
+  bind_rows(haven::read_dta("dataset/entreprises_v04.dta") %>% select(one_of(varlist))) %>%
+  filter(int_cons==1) %>% labelled::to_factor()
+names(data_entreprises) <- str_to_lower(str_replace_all(names(data_entreprises),pattern = "__","_"))
+
+data_entreprises$cva <- data_entreprises$focusvc_1
+data_entreprises$cva <- fct_drop(data_entreprises$cva)
+data_entreprises$region <- fct_drop(data_entreprises$region)
+
+data_entreprises$name_check_interviewer <- str_replace_all(data_entreprises$name_check_interviewer,"^(lucas)$","MBOUO MBOUO ADAMOU")
+data_entreprises$name_check_interviewer <- str_replace_all(data_entreprises$name_check_interviewer,"^(DAVID SOPPO MPAND0)$","DAVID SOPPO MPANDO")
+data_entreprises$name_check_interviewer <- str_replace_all(data_entreprises$name_check_interviewer,"^(MBOUOMBOUO ADAMOU)$","MBOUO MBOUO ADAMOU")
+
+# setdiff(unique(data_entreprises$name_check_interviewer),unique(msme_deploiement_phase01$superviseur))
+data_entreprises$name_check_interviewer <- str_to_upper(data_entreprises$name_check_interviewer)
+data_entreprises$village <- str_to_upper(data_entreprises$village)
+
+#Bases de donnees menages
+varlist <- c("interview__key","interview__id","id_check_interviewer","name_check_interviewer","date",
+             "region","village","focusvc_1","focusvc_2","focusvc_3","household_id",
+             "hh_consent", "int_cons", "name",
+             "hh_phone","hh_language", "head_hh", "residence", "age", "gender", "marital")
+# Suppression des donnees du pilote
+keylist <- c(
+"98-24-31-61","75-81-97-28","27-72-04-92","27-28-89-37", #Donnees Pilote-Adamaoua
+"47-91-82-40","04-93-73-89", "37-29-96-17","36-47-08-81" #Donnees Pilote-Ouest
+)
+
+data_menages <- haven::read_dta("dataset/menages_v04.dta") %>% select(one_of(varlist)) %>%
+  bind_rows(haven::read_dta("dataset/menages_v05.dta") %>% select(one_of(varlist))) %>%
+  filter(int_cons==1,!interview__key %in% keylist) %>% labelled::to_factor()
+names(data_menages) <- str_to_lower(str_replace_all(names(data_menages),pattern = "__","_"))
+
+data_menages$cva <- data_menages$focusvc_1
+
+#..................................................................................................
+# Correction manuelle d'une CVA erronée
+# L'agent doit BIAGUL doit déplacer toutes les questions en lien avec focusvc_2 pour celles en 
+# lien avec focusvc_1
+#_________________________________________________________________________________________________
+rowid <- which(data_menages$interview_key=="37-08-81-62")
+data_menages$cva[rowid] <- data_menages$focusvc_2[rowid] # Correction par
+#..................................................................................................
+data_menages$cva <- fct_drop(data_menages$cva)
+data_menages$region <- fct_drop(data_menages$region)
+
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(YANONE)$","YANONE BLANDINE")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(GNAMBI)$","GNAMBI GERAUDINE VANESSA")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(GAMBI)$","GNAMBI GERAUDINE VANESSA")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(GNAMBI GERAUDINE)$","GNAMBI GERAUDINE VANESSA")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(wanji christelle)$","BIAGUL WANDJI CHRISTELLE")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(BIAGUL WANJI)$","BIAGUL WANDJI CHRISTELLE")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(Biagul wanji)$","BIAGUL WANDJI CHRISTELLE")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(Franklin)$","FOUODJI FRANKLIN")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(NJOYA)$","NJOYA FIDELE")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(NJOYA FIDÈLE)$","NJOYA FIDELE")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(DJAKBA RAPHAËL)$","DJAKBA RAPHAEL")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(pauline)$","BAKAYANG PAULINE")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(BAKAYANG  PAULINE)$","BAKAYANG PAULINE")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(Ngaoundere)$","BAKAYANG PAULINE")
+data_menages$name_check_interviewer <- str_replace_all(data_menages$name_check_interviewer,"^(pau)$","BAKAYANG PAULINE")
+
+# # Verification des corrections apportées
+# unique(data_menages$name_check_interviewer)
+# unique(hh_deploiement_phase01$agent)
+# setdiff(unique(data_menages$name_check_interviewer),unique(hh_deploiement_phase01$agent))
+data_menages$name_check_interviewer <- str_to_upper(data_menages$name_check_interviewer)
+data_menages$village <- str_to_upper(data_menages$village)
+
+# Base de donnees des effectifs cibles...
+data_echantillon <- readxl::read_excel("-- Configuration/setting.xlsx",sheet = 7)
+data_echantillon$region <- str_to_sentence(data_echantillon$region,locale="fr")
+data_echantillon$region <- str_replace_all(data_echantillon$region,"Adamaoua","Adamawa")
+data_echantillon$cva <- str_to_sentence(data_echantillon$cva,locale="fr")
+data_echantillon$cva <- str_replace_all(data_echantillon$cva,"Aviculture","Volaille")
+data_echantillon$gender <- str_to_sentence(data_echantillon$sex,locale="fr")
+data_echantillon <- data_echantillon %>% select(-sex,-n_localite,-taille,-delete)
+# data_echantillon$region <- fct_relabel(data_echantillon$region, ~ str_to_title(.x,locale="fr"))
+
+
+# Chargement des fichiers utilitaires
+hh_phase01 <- readxl::read_excel(path = "dataset/Procisa_Phase01.xlsx",sheet = 1)
+msme_phase01 <- readxl::read_excel(path = "dataset/Procisa_Phase01.xlsx",sheet = 2)
+
+# Base echantillonnage
+suppressMessages(
+  data_sample <- readxl::read_excel(path = "dataset/data_sample.xlsx",sheet = 1) %>%
+    filter(sample=="primary") %>% # Ajout des noms des agents
+    left_join(hh_phase01 %>% select(localite,agent,nb_interview),
+              by = c("localite")))
+
+data_sample$cva <- as.character(data_sample$cva) %>% str_to_sentence()
+data_sample$cva <- str_replace_all(data_sample$cva,"Aviculture","Volaille")
+data_sample$region <- as.character(data_sample$region) %>% str_to_sentence() %>% 
+  str_replace_all("Adamaoua","Adamawa")
+data_sample$gender <- as.character(data_sample$sexe) %>% 
+  str_replace_all(pattern = "^M$",replacement = "Homme") %>%
+  str_replace_all(pattern = "^F$",replacement = "Femme")
+            
+```
+
+
+# Enquête ménages
+
+```{r echo=FALSE, warning=FALSE,message=FALSE,results='asis'}
+
+# Production de la statistique...
+suppressMessages(
+  tmp <- data_echantillon %>% filter(cva!="Cacao") %>%
+    select(region,cva,sample) %>% distinct() %>%
+    summarise(cible=sum(sample)) %>%
+    bind_cols(
+      data_menages %>% filter(cva %in% c("Pomme de terre","Volaille")) %>% 
+        summarise(effectue=n())
+  )
+)
+
+tmp$tx_progression <- sprintf("%.01f%%",100*tmp$effectue/tmp$cible)
+
+tmp <- tmp %>%
+  mutate(start_date=min(params %>% map("start_date") %>% unlist() %>% as_date()))
+tmp$end_date <- tmp$start_date+days(14)
+tmp$date_evaluation <- today()
+tmp$cible_intermediaire <- round(tmp$cible*as.numeric(tmp$date_evaluation-tmp$start_date)/as.numeric(tmp$end_date-tmp$start_date),0)
+
+val_tmp <- tmp$effectue-tmp$cible_intermediaire
+tmp$evaluation <- sprintf("%s",
+                          ifelse(tmp$effectue==tmp$cible,"CIBLE ATTEINTE",
+                                 ifelse(tmp$effectue>tmp$cible,"EXPLOIT",
+                                        ifelse(val_tmp==0,"ECHEANCE RESPECTEE",
+                                               ifelse(val_tmp>0,"EN AVANCE","EN RETARD")
+                                               )
+                                        )
+                                 )
+                          )
+
+val_tmp <- tmp$cible-tmp$effectue
+date_tmp <- tmp$end_date-tmp$date_evaluation
+tmp$commentaire <- sprintf("%s %s",
+                           ifelse(val_tmp<0,
+                                  sprintf("%d interview(s) supplémentaire(s) fait(s)",abs(val_tmp)),
+                                  sprintf("%d interview(s) à faire",val_tmp)),
+                           ifelse(date_tmp<0,
+                                  sprintf("avec %d jour(s) de collecte de plus",abs(date_tmp)),
+                                  sprintf("sur %d jour(s) de collecte restants",date_tmp)))
+
+
+ft <- flextable(tmp %>% select(-start_date:-cible_intermediaire))
+# Mise en page du tableau
+ft <- ft %>% 
+  color(i = ~ evaluation %in% "EN RETARD", j = ~ tx_progression + evaluation, color = "darkred") %>%
+  color(i = ~ evaluation %in% "EXPLOIT", j = ~ tx_progression + evaluation, color = "darkblue") %>%
+  color(i = ~ evaluation %in% "CIBLE ATTEINTE", j = ~ tx_progression + evaluation, color = "darkgreen") %>%
+  valign(valign = "top") %>% theme_box() %>% #autofit() %>%
+  fontsize(part = "all", size = 10)
+# Affichage du tableau...
+knit_print(ft)
+```
+
+## Par région & chaine de valeur agricole (cva)
+```{r echo=FALSE, warning=FALSE,message=FALSE,results='asis'}
+
+# Production de la statistique...
+suppressMessages(
+  tmp <- data_echantillon %>% filter(cva!="Cacao") %>% 
+    select(region,cva,cible=sample) %>% distinct() %>%
+    arrange(region,cva)  %>%
+    left_join(
+      data_menages %>% filter(cva %in% c("Pomme de terre","Volaille")) %>% 
+        group_by(region,cva) %>% summarise(effectue=n(),.groups = "drop") %>%
+        mutate(region=as.character(region),cva=as.character(cva)) %>% 
+        arrange(region,cva),
+      by=c("region","cva")
+  )
+)
+
+tmp$tx_progression <- sprintf("%.01f%%",100*tmp$effectue/tmp$cible)
+
+tmp <- tmp %>%
+  group_by(region) %>% nest() %>% ungroup() %>%
+  mutate(start_date=(params %>% map("start_date") %>% unlist() %>% as_date())[region]) %>%
+  unnest(data)
+tmp$end_date <- tmp$start_date+days(14)
+tmp$date_evaluation <- today()
+tmp$cible_intermediaire <- round(tmp$cible*as.numeric(tmp$date_evaluation-tmp$start_date)/as.numeric(tmp$end_date-tmp$start_date),0)
+
+val_tmp <- tmp$effectue-tmp$cible_intermediaire
+tmp$evaluation <- sprintf("%s",
+                          ifelse(tmp$effectue==tmp$cible,"CIBLE ATTEINTE",
+                                 ifelse(tmp$effectue>tmp$cible,"EXPLOIT",
+                                        ifelse(val_tmp==0,"ECHEANCE RESPECTEE",
+                                               ifelse(val_tmp>0,"EN AVANCE","EN RETARD")
+                                               )
+                                        )
+                                 )
+                          )
+
+val_tmp <- tmp$cible-tmp$effectue
+date_tmp <- tmp$end_date-tmp$date_evaluation
+tmp$commentaire <- sprintf("%s %s",
+                           ifelse(val_tmp<0,
+                                  sprintf("%d interview(s) supplémentaire(s) fait(s)",abs(val_tmp)),
+                                  sprintf("%d interview(s) à faire",val_tmp)),
+                           ifelse(date_tmp<0,
+                                  sprintf("avec %d jour(s) de collecte en plus",abs(date_tmp)),
+                                  sprintf("sur %d jour(s) de collecte restants",date_tmp)))
+
+ft <- flextable(tmp %>% select(-start_date:-cible_intermediaire))
+# Mise en page du tableau
+ft <- ft %>% 
+  color(i = ~ evaluation %in% "EN RETARD", j = ~ tx_progression + evaluation, color = "darkred") %>%
+  color(i = ~ evaluation %in% "EXPLOIT", j = ~ tx_progression + evaluation, color = "darkblue") %>%
+  color(i = ~ evaluation %in% "CIBLE ATTEINTE", j = ~ tx_progression + evaluation, color = "darkgreen") %>%
+  merge_v(j = "region") %>% valign(valign = "top") %>% theme_box() %>% #autofit() %>%
+  fontsize(part = "all", size = 10)
+# Affichage du tableau...
+knit_print(ft)
+```
+
+## Par région, cva & sexe
+
+
+```{r echo=FALSE, warning=FALSE,message=FALSE,results='asis'}
+# Production de la statistique...
+suppressMessages(
+  tmp <- data_echantillon %>% filter(cva!="Cacao") %>% 
+    select(region,cva,gender,cible=n) %>% distinct() %>%
+    arrange(region,cva,gender)  %>%
+    left_join(
+      data_menages %>% filter(cva %in% c("Pomme de terre","Volaille")) %>% 
+        group_by(region,cva,gender) %>% summarise(effectue=n(),.groups = "drop") %>%
+        mutate(region=as.character(region),cva=as.character(cva),gender=as.character(gender)) %>% 
+        arrange(region,cva,gender),
+      by=c("region","cva","gender")
+  )
+)
+
+tmp$tx_progression <- sprintf("%.01f%%",100*tmp$effectue/tmp$cible)
+
+tmp <- tmp %>%
+  group_by(region) %>% nest() %>% ungroup() %>%
+  mutate(start_date=(params %>% map("start_date") %>% unlist() %>% as_date())[region]) %>%
+  unnest(data)
+tmp$end_date <- tmp$start_date+days(14)
+tmp$date_evaluation <- today()
+tmp$cible_intermediaire <- round(tmp$cible*as.numeric(tmp$date_evaluation-tmp$start_date)/as.numeric(tmp$end_date-tmp$start_date),0)
+
+val_tmp <- tmp$effectue-tmp$cible_intermediaire
+tmp$evaluation <- sprintf("%s",
+                          ifelse(tmp$effectue==tmp$cible,"CIBLE ATTEINTE",
+                                 ifelse(tmp$effectue>tmp$cible,"EXPLOIT",
+                                        ifelse(val_tmp==0,"ECHEANCE RESPECTEE",
+                                               ifelse(val_tmp>0,"EN AVANCE","EN RETARD")
+                                               )
+                                        )
+                                 )
+                          )
+
+val_tmp <- tmp$cible-tmp$effectue
+date_tmp <- tmp$end_date-tmp$date_evaluation
+tmp$commentaire <- sprintf("%s %s",
+                           ifelse(val_tmp<0,
+                                  sprintf("%d interview(s) supplémentaire(s) fait(s)",abs(val_tmp)),
+                                  sprintf("%d interview(s) à faire",val_tmp)),
+                           ifelse(date_tmp<0,
+                                  sprintf("avec %d jour(s) de collecte en plus",abs(date_tmp)),
+                                  sprintf("sur %d jour(s) de collecte restants",date_tmp)))
+
+
+ft <- flextable(tmp %>% select(-start_date:-cible_intermediaire))
+# Mise en page du tableau
+ft <- ft %>% 
+  color(i = ~ evaluation %in% "EN RETARD", j = ~ tx_progression + evaluation, color = "darkred") %>%
+  color(i = ~ evaluation %in% "EXPLOIT", j = ~ tx_progression + evaluation, color = "darkblue") %>%
+  color(i = ~ evaluation %in% "CIBLE ATTEINTE", j = ~ tx_progression + evaluation, color = "darkgreen") %>%
+  merge_v(j = c("region","cva")) %>% valign(valign = "center") %>% theme_box() %>% # autofit() %>%
+  fontsize(part = "all", size = 10)
+# Affichage du tableau...
+knit_print(ft)
+```
+
+
+## Par agent de terrain
+
+```{r echo=FALSE, warning=FALSE,message=FALSE,results='asis'}
+# Production de la statistique...
+suppressMessages(
+  tmp <- hh_phase01  %>% 
+    select(region,agent,nb_interview) %>% 
+    mutate(region=str_to_sentence(str_replace_all(region,"ADAMAOUA","Adamawa"))) %>%
+    group_by(region,agent) %>% summarise(cible=sum(nb_interview),.groups = "drop") %>%
+    arrange(region,agent)  %>%
+    left_join(
+      data_menages %>% filter(cva %in% c("Pomme de terre","Volaille")) %>%
+        rename(agent=name_check_interviewer) %>%
+        group_by(region,agent) %>% summarise(effectue=n(),.groups = "drop") %>%
+        mutate(region=as.character(region),agent=as.character(agent)) %>% 
+        arrange(region,agent),
+      by=c("region","agent")
+  )
+)
+
+tmp$tx_progression <- sprintf("%.01f%%",100*tmp$effectue/tmp$cible)
+
+tmp <- tmp %>%
+  group_by(region) %>% nest() %>% ungroup() %>%
+  mutate(start_date=(params %>% map("start_date") %>% unlist() %>% as_date())[region]) %>%
+  unnest(data)
+tmp$end_date <- tmp$start_date+days(14)
+tmp$date_evaluation <- today()
+tmp$cible_intermediaire <- round(tmp$cible*as.numeric(tmp$date_evaluation-tmp$start_date)/as.numeric(tmp$end_date-tmp$start_date),0)
+
+val_tmp <- tmp$effectue-tmp$cible_intermediaire
+tmp$evaluation <- sprintf("%s",
+                          ifelse(tmp$effectue==tmp$cible,"CIBLE ATTEINTE",
+                                 ifelse(tmp$effectue>tmp$cible,"EXPLOIT",
+                                        ifelse(val_tmp==0,"ECHEANCE RESPECTEE",
+                                               ifelse(val_tmp>0,"EN AVANCE","EN RETARD")
+                                               )
+                                        )
+                                 )
+                          )
+
+val_tmp <- tmp$cible-tmp$effectue
+date_tmp <- tmp$end_date-tmp$date_evaluation
+tmp$commentaire <- sprintf("%s %s",
+                           ifelse(val_tmp<0,
+                                  sprintf("%d interview(s) supplémentaire(s) fait(s)",abs(val_tmp)),
+                                  sprintf("%d interview(s) à faire",val_tmp)),
+                           ifelse(date_tmp<0,
+                                  sprintf("avec %d jour(s) de collecte en plus",abs(date_tmp)),
+                                  sprintf("sur %d jour(s) de collecte restants",date_tmp)))
+
+
+ft <- flextable(tmp %>% select(-start_date:-cible_intermediaire))
+# Mise en page du tableau
+ft <- ft %>% 
+  color(i = ~ evaluation %in% "EN RETARD", j = ~ tx_progression + evaluation, color = "darkred") %>%
+  color(i = ~ evaluation %in% "EXPLOIT", j = ~ tx_progression + evaluation, color = "darkblue") %>%
+  color(i = ~ evaluation %in% "CIBLE ATTEINTE", j = ~ tx_progression + evaluation, color = "darkgreen") %>%
+  merge_v(j = "region") %>% valign(valign = "top") %>% theme_box() %>% #autofit() %>%
+  fontsize(part = "all", size = 10)
+# Affichage du tableau...
+knit_print(ft)
+```
+
+## Par agent, cva & genre du répondant
+
+```{r echo=FALSE, warning=FALSE,message=FALSE,results='asis'}
+# Production de la statistique...
+suppressMessages(
+  tmp <- data_sample %>% filter(cva!="Cacao") %>%
+    group_by(agent,cva,gender) %>% summarise(cible=n(),.groups = "drop") %>% 
+    arrange(agent,cva,gender)  %>%
+    left_join(
+      data_menages %>% filter(cva %in% c("Pomme de terre","Volaille")) %>%
+        rename(agent=name_check_interviewer) %>%
+        group_by(agent,cva,gender) %>% summarise(effectue=n(),.groups = "drop") %>%
+        mutate(agent=as.character(agent),cva=as.character(cva),gender=as.character(gender)) %>% 
+        arrange(agent,cva,gender),
+      by=c("agent","cva","gender")
+  )
+)
+
+tmp$start_date <- ymd("2021-12-04")
+for(varname in names(params)){
+  regname <- str_to_upper(ifelse(varname=="Adamawa","ADAMAOUA",varname))
+  tmp$start_date[tmp$agent %in% unique(hh_phase01$agent[hh_phase01$region==regname])] <- params[[c(varname,"start_date")]]
+}
+
+tmp$tx_progression <- sprintf("%.01f%%",100*tmp$effectue/tmp$cible)
+tmp$end_date <- tmp$start_date+days(14)
+tmp$date_evaluation <- today()
+tmp$cible_intermediaire <- round(tmp$cible*as.numeric(tmp$date_evaluation-tmp$start_date)/as.numeric(tmp$end_date-tmp$start_date),0)
+
+val_tmp <- tmp$effectue-tmp$cible_intermediaire
+tmp$evaluation <- sprintf("%s",
+                          ifelse(tmp$effectue==tmp$cible,"CIBLE ATTEINTE",
+                                 ifelse(tmp$effectue>tmp$cible,"EXPLOIT",
+                                        ifelse(val_tmp==0,"ECHEANCE RESPECTEE",
+                                               ifelse(val_tmp>0,"EN AVANCE","EN RETARD")
+                                               )
+                                        )
+                                 )
+                          )
+
+val_tmp <- tmp$cible-tmp$effectue
+date_tmp <- tmp$end_date-tmp$date_evaluation
+tmp$commentaire <- sprintf("%s %s",
+                           ifelse(val_tmp<0,
+                                  sprintf("%d interview(s) supplémentaire(s) fait(s)",abs(val_tmp)),
+                                  sprintf("%d interview(s) à faire",val_tmp)),
+                           ifelse(date_tmp<0,
+                                  sprintf("avec %d jour(s) de collecte en plus",abs(date_tmp)),
+                                  sprintf("sur %d jour(s) de collecte restants",date_tmp)))
+
+
+ft <- flextable(tmp %>% select(-start_date,-end_date:-cible_intermediaire))
+# Mise en page du tableau
+ft <- ft %>% 
+  color(i = ~ evaluation %in% "EN RETARD", j = ~ tx_progression + evaluation, color = "darkred") %>%
+  color(i = ~ evaluation %in% "EXPLOIT", j = ~ tx_progression + evaluation, color = "darkblue") %>%
+  color(i = ~ evaluation %in% "CIBLE ATTEINTE", j = ~ tx_progression + evaluation, color = "darkgreen") %>%
+  merge_v(j = c("agent","cva")) %>% valign(valign = "center") %>% theme_box() %>% # autofit() %>%
+  fontsize(part = "all", size = 10)
+
+# Affichage du tableau...
+knit_print(ft)
+```
+
+<br/>
+
+
+# Enquête entreprise
+
+```{r echo=FALSE, warning=FALSE,message=FALSE,results='asis'}
+# Production de la statistique...
+suppressMessages(
+  tmp <- msme_phase01  %>% 
+    select(region,nb_interview) %>% 
+    mutate(region=str_to_sentence(str_replace_all(region,"ADAMAOUA","Adamawa"))) %>%
+    group_by(region) %>% summarise(cible=sum(nb_interview),.groups = "drop") %>%
+    arrange(region)  %>%
+    left_join(
+      data_entreprises %>% filter(cva %in% c("Pomme de terre","Volaille")) %>%
+        group_by(region) %>% summarise(effectue=n(),.groups = "drop") %>%
+        mutate(region=as.character(region)) %>% arrange(region),
+      by=c("region")
+  )
+)
+
+tmp$tx_progression <- sprintf("%.01f%%",100*tmp$effectue/tmp$cible)
+
+tmp <- tmp %>%
+  group_by(region) %>% nest() %>% ungroup() %>%
+  mutate(start_date=(params %>% map("start_date") %>% unlist() %>% as_date())[region]) %>%
+  unnest(data)
+tmp$end_date <- tmp$start_date+days(14)
+tmp$date_evaluation <- today()
+tmp$cible_intermediaire <- round(tmp$cible*as.numeric(tmp$date_evaluation-tmp$start_date)/as.numeric(tmp$end_date-tmp$start_date),0)
+
+val_tmp <- tmp$effectue-tmp$cible_intermediaire
+tmp$evaluation <- sprintf("%s",
+                          ifelse(tmp$effectue==tmp$cible,"CIBLE ATTEINTE",
+                                 ifelse(tmp$effectue>tmp$cible,"EXPLOIT",
+                                        ifelse(val_tmp==0,"ECHEANCE RESPECTEE",
+                                               ifelse(val_tmp>0,"EN AVANCE","EN RETARD")
+                                               )
+                                        )
+                                 )
+                          )
+
+val_tmp <- tmp$cible-tmp$effectue
+date_tmp <- tmp$end_date-tmp$date_evaluation
+tmp$commentaire <- sprintf("%s %s",
+                           ifelse(val_tmp<0,
+                                  sprintf("%d interview(s) supplémentaire(s) fait(s)",abs(val_tmp)),
+                                  sprintf("%d interview(s) à faire",val_tmp)),
+                           ifelse(date_tmp<0,
+                                  sprintf("avec %d jour(s) de collecte en plus",abs(date_tmp)),
+                                  sprintf("sur %d jour(s) de collecte restants",date_tmp)))
+
+
+ft <- flextable(tmp %>% select(-start_date:-cible_intermediaire))
+# Mise en page du tableau
+ft <- ft %>% 
+  color(i = ~ evaluation %in% "EN RETARD", j = ~ tx_progression + evaluation, color = "darkred") %>%
+  color(i = ~ evaluation %in% "EXPLOIT", j = ~ tx_progression + evaluation, color = "darkblue") %>%
+  color(i = ~ evaluation %in% "CIBLE ATTEINTE", j = ~ tx_progression + evaluation, color = "darkgreen") %>%
+  merge_v(j = "region") %>% valign(valign = "top") %>% theme_box() %>% #autofit() %>%
+  fontsize(part = "all", size = 10)
+# Affichage du tableau...
+knit_print(ft)
+```
