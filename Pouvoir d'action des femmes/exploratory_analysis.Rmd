@@ -1,0 +1,926 @@
+---
+title: "Avoir et Pouvoir au féminin - RNEP2023"
+output: 
+  html_notebook:
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+    theme: united #mise en page du document
+---
+
+```{r setup, echo=FALSE}
+
+# Chargement des librairies utilitaires
+pacman::p_load(gtExtras,gtsummary,gt,openxlsx,rio,labelled,tidyverse)
+# library(expss)      # for creating tables with Haven labeled data
+
+# on utilisera aussi finalfit, patchwork & ggstats
+
+# Nettoyage de l'espace de travail
+rm(list=ls())
+
+# Mise en paged des tableaux
+# suppressMessages(theme_gtsummary_journal(journal = "jama"))
+suppressMessages(theme_gtsummary_compact())
+suppressMessages(theme_gtsummary_language("fr", decimal.mark = ",", big.mark = " "))
+
+# Import des donnees 
+# file.path("data","rnep2023_2.dta")
+database <- haven::read_dta("data/rnep23.dta")
+
+```
+
+# Preparation des données
+
+```{r echo=FALSE}
+
+dbase <- database  %>% 
+  select(caseid,v005,v745a,v745b,v745c,v745d,v739,v743a,v743b,v743d,v012,v013,v024,v106,s904,v130,v025,v190,
+         v190a,v504,v741,v717,v159,v169a,v171a,v171b,v137,v201,v136,v501,v505,v730,v201,v202,v203,v218,v219,
+         wt:po_bien,v101,one_of(c(sprintf("d103%s",letters[1:3]),sprintf("d105%s",letters[1:11]))),
+         v044,v502) %>% 
+  filter(
+    v012>=15 & v012<=49#, #uniquement les femmes qui ont entre 15 & 49 ans
+    # !is.na(instruc_h), # on exclut les observations où les 
+  )
+
+#* [Création du score de prise de décision ]
+## Encodage de la variable  "Utilisation des gains"
+dbase$v739_score <- with(dbase,case_when(
+  as.numeric(util_gain_fem) == 1 ~ 2,
+  as.numeric(util_gain_fem) == 2 ~ 1,
+  as.numeric(util_gain_fem) == 3 ~ 0,
+))
+
+## Encodage de la variable prise de décision sur les soins de santé de la femme
+dbase$v743a_score <- with(dbase,case_when(
+  as.numeric(part_santé) == 1 ~ 2,
+  as.numeric(part_santé) == 2 ~ 1,
+  as.numeric(part_santé) == 3 ~ 0,
+))
+
+## Encodage de la variable  prise de décision sur les achats importants du ménage
+dbase$v743b_score <- with(dbase,case_when(
+  as.numeric(part_achat) == 1 ~ 2,
+  as.numeric(part_achat) == 2 ~ 1,
+  as.numeric(part_achat) == 3 ~ 0,
+))
+
+## Encodage de la variable prise de décision sur la visite à la famille ou aux proches
+dbase$v743d_score <- with(dbase,case_when(
+  as.numeric(part_visit) == 1 ~ 2,
+  as.numeric(part_visit) == 2 ~ 1,
+  as.numeric(part_visit) == 3 ~ 0,
+))
+
+## Score de prise de décision
+# rowid <- which(dbase$occup==2)
+# dbase$score_decision_occupe <- NA
+# dbase$score_decision_occupe[rowid] <- with(dbase[rowid,],v739_score+v743a_score+v743b_score+v743d_score)
+# psy::cronbach(dbase %>% select(v739_score:v743d_score))
+# Methode de calcul 
+# dbase$score_decision_nonoccupe <- NA
+# dbase$score_decision_nonoccupe[-rowid] <- with(dbase[-rowid,],v743a_score+v743b_score+v743d_score)
+# rm(rowid)
+
+# dbase$score_decision_occupe <- with(dbase,v739_score+v743a_score+v743b_score+v743d_score)
+dbase$score_decision <- with(dbase,v743a_score+v743b_score+v743d_score)
+# psy::cronbach(dbase %>% select(v743a_score:v743d_score))
+
+# Creation de la variable prise de décision
+dbase <- dbase %>% rowwise() %>% 
+  mutate(decision=max(v743a_score,v743b_score,v743d_score)) %>% 
+  ungroup() %>% 
+  set_variable_labels(decision="Prise de décision") %>% 
+  set_value_labels(decision=c(`Homme/autre décide seul`=0,
+                              `Femme et Homme décident ensemble`=1,
+                              `Femme décide seule`=2))
+
+
+#* [Création du score de prise de possession ]
+## Encodage de la variable  "possession de la maison"
+dbase$possession_maison <- with(dbase,case_when(
+  as.numeric(p_maison) == 0 ~ 0,
+  as.numeric(p_maison) ==1 & (is.na(titre_m) | as.numeric(titre_m) == 0) ~ 1,
+  as.numeric(p_maison) ==1 & as.numeric(titre_m) == 1 ~ 2,
+))
+
+## Encodage de la variable  "possession de la terre"
+dbase$possession_terre <- with(dbase,case_when(
+  as.numeric(p_terre) == 0 ~ 0,
+  as.numeric(p_terre) ==1 & (is.na(titre_t) | as.numeric(titre_t) == 0) ~ 1,
+  as.numeric(p_terre) ==1 & as.numeric(titre_t) == 1 ~ 2,
+))
+
+#* [Création du score de possession]
+# Création de la variable Possession de ressources
+dbase <- dbase %>% rowwise() %>% 
+  mutate(possession=max(possession_maison,possession_maison)) %>% 
+  ungroup() %>% 
+  set_variable_labels(possession="Possession de ressources") %>% 
+  set_value_labels(possession=c(`Ne possède pas de ressources`=0,
+                              `Possession de ressources sans document officiel`=1,
+                              `Possession de ressources avec document officiel`=2))
+
+# Création du score de possession
+dbase$score_possession <- with(dbase,possession_maison+possession_maison)
+# psy::cronbach(dbase %>% select(possession_terre,score_possession))
+
+#* [Création de la variabble empowerment]
+dbase <- dbase %>% rowwise() %>% 
+  mutate(
+    empowerment=max(decision,possession),
+    empowerment = ifelse(decision==2 &possession==2,3,empowerment),
+    score_empowerment=empowerment
+  ) %>% 
+  ungroup() %>% 
+  set_variable_labels(empowerment="Empowerment des femmes",score_empowerment="Empowerment des femmes") %>% 
+  set_value_labels(empowerment=c(`Aucun`=0,`Partiel`=1,`Quasi total`=2,`Total`=3))
+
+dbase$instruc_homme  <- with(dbase, ifelse(instruc_h==8,NA,instruc_h))
+
+# Recoder la variable region
+dbase <- dbase %>% mutate(
+  region_d = v101,
+  age = v012,
+  expo_media = (tele%%2) + (internet%%2) + (mobil%%2),
+  # Alpha de crobach pour les variables relatives à l'exposition aux medias
+  # psy::cronbach(dbase %>% select(tele:mobil))
+  nb_enfant = v218,
+  ecart_age_conjoint = as.numeric(eage),
+  polygamie = as.numeric(regim==2),
+  nivie = as.numeric(niveau),
+  residence_partenaire = as.numeric(resid)%%2,
+  statocup = as.numeric(occup)-1,
+  nivins_femme = as.numeric(instruc_f),
+  milres = milieu,
+  milieu_rural = as.numeric(milieu) - 1,
+  religion = ifelse(religion==4,3,religion),
+  # ecart_nivins = instruc_f - ifelse(is.na(instruc_h),instruc_f,instruc_h),
+  # on va exclure ceux qui ont déclarer avoir
+  ecart_nivins = as.numeric(instruc_f) - instruc_homme, 
+  score_utilisation = v739_score,
+  utilisation_gain = v739_score,
+  util_gain_fem2 = as.numeric(util_gain_fem %in% c(1,2)),
+  decision_sante = part_santé,
+  decision_achat = part_achat,
+  decision_visite = part_visit,
+  violence_physique = as.numeric(d105a>0) + as.numeric(d105b>0) + as.numeric(d105c>0) + 
+    as.numeric(d105d>0) + as.numeric(d105e>0) + as.numeric(d105f>0) + #as.numeric(d105g>0) + 
+    as.numeric(d105j>0),
+  violence_sexuelle = as.numeric(d105h>0) + as.numeric(d105i>0) + as.numeric(d105k>0),
+  violence_emotionnelle = as.numeric(d103a>0) + as.numeric(d103b>0) + as.numeric(d103c>0),
+  vbg_score = violence_physique + violence_sexuelle + violence_emotionnelle
+) %>% 
+  # rename(
+  #   decision_sante =
+  # ) %>% 
+  set_value_labels(
+    region_d = c(
+      `Adamaoua` = 1,
+      `Centre (sans Yaoundé)` = 2,
+      `Douala` = 3,
+      `Est` = 4,
+      `Extrême-Nord` = 5,
+      `Littoral (sans Douala)` = 6,
+      `Nord` = 7,
+      `Nord-ouest` = 8,
+      `Nord-ouest` = 9,
+      `Ouest` = 10,
+      `Sud-ouest` = 11,
+      `Yaoundé` = 12
+    ),
+    util_gain_fem2=c(`Femme ne participe pas`=0,`Femme participe`=1),
+    religion=c(`Chrétiens`=1,`Mulsumans`=2,`Autre`=3),
+    utilisation_gain=c(`Homme/autre décide seul`=0,`Femme et Homme décident ensemble`=1,`Femme décide seule`=2)
+  ) %>% 
+  set_variable_labels(
+    # variables dépendantes
+    score_decision = "Score de prise de décision",
+    score_possession="Score de possession de ressources",
+    score_utilisation = "Score d'utilisation des gains de la femme",
+    utilisation_gain = "Prise de décision en matière d'utilisation des gains de la femme",
+    # Variables explicatuves,
+    age = "Age de la répondante",
+    religion="Religion",
+    region = "Région",
+    expo_media = "Exposition aux médias",
+    nb_enfant = "Nombre d'enfants vivants",
+    ecart_age_conjoint = "Ecart d'âge entre conjoints",
+    polygamie = "Union polygame",
+    milres = "Milieu de résidence",
+    milieu_rural = "Milieu de résidence rural",
+    niveau = "Niveau de vie du ménage",
+    nivie = "Niveau de vie du ménage",
+    residence_partenaire = "Vit habituellement avec son conjoint",
+    statocup = "Occupation professionnelle",
+    nivins_femme = "Niveau d'instruction de la femme",
+    ecart_nivins = "Ecart entre d'instruction entre conjoints", #varie de -3 à 3
+    decision_sante ="Participation à la prise de décision sur les soins de santé de la femme",
+    decision_achat = "Participation à la prise de décision relative aux achats immportants du ménage",
+    decision_visite = "Participation à la prise de décision relative aux visites à la fammille/proches",
+    violence_physique = "Score associées aux violences physiques de la part du partenaire",
+    violence_sexuelle = "Score associées aux violences sexuelles de la part du partenaire",
+    violence_emotionnelle = "Score associées aux violences émotionnelles de la part du partenaire",
+    vbg_score = "Score des violences basées sur le genre",
+    util_gain_fem2="Utilisation des gains de la femme" 
+  )
+
+# # /Violence domestique physique
+# IRdata <- IRdata %>%
+#   mutate(dv_phy =
+#            case_when(
+#              d105a>0 | d105b>0 | d105c>0 | d105d>0 | d105e>0 | d105f>0 | d105g>0 |d105j>0 ~ 1, # violence by current partner
+#              d130a>0  ~ 1,  # violence by former partner
+#              d115y==0 ~ 1, # violence by anyone other than partner
+#              d118y==0 ~ 1, # violence during pregnancy 
+#              v044==1  ~ 0 )) %>% 
+#   set_value_labels(dv_phy = c("Yes" = 1, "No"=0)) %>%
+#   set_variable_labels(dv_phy = "Experienced physical violence since age 15")
+
+# # //Current partner
+# IRdata <- IRdata %>%
+#   mutate(dv_phy_hus_curr =
+#            case_when(
+#              v502==1 & (d105a>0 | d105b>0 | d105c>0 | d105d>0 | d105e>0 | d105f>0 | d105g>0 |d105j>0 | d118a==1) ~ 1, 
+#              dv_phy==1 ~ 0 )) %>% 
+#   set_value_labels(dv_phy_hus_curr = c("Yes" = 1, "No"=0)) %>%
+#   set_variable_labels(dv_phy_hus_curr = "Person committing physical violence: current husband/partner")
+
+# Violence domestique sur le plan sexuel
+# IRdata <- IRdata %>%
+#   mutate(dv_sex =
+#            case_when(
+#              d105h>0 | d105i>0 | d105k>0  ~ 1, # violence by current partner
+#              d130b>0  ~ 1,  # violence by former partner
+#              d124==1  ~ 1, # violence by anyone other than partner
+#              d125==1 ~ 1, # forced to perform unwanted acts 
+#              v044==1  ~ 0 )) %>% 
+#   set_value_labels(dv_sex = c("Yes" = 1, "No"=0)) %>%
+#   set_variable_labels(dv_sex = "Ever experienced sexual violence")
+
+# # //Ever
+# IRdata <- IRdata %>%
+#   mutate(dv_phy_sex =
+#            case_when(
+#              dv_phy==1 & dv_sex==1 ~ 1 ,
+#              v044==1  ~ 0 )) %>% 
+#   set_value_labels(dv_phy_sex = c("Yes" = 1, "No"=0)) %>%
+#   set_variable_labels(dv_phy_sex = "Ever experienced physical AND sexual violence")
+
+# # //Current partner
+# IRdata <- IRdata %>%
+#   mutate(dv_sex_hus_curr =
+#            case_when(
+#              v502==1 & (d105h>0 | d105i>0 |d105k>0 | d127==1) ~ 1 ,
+#              dv_sex==1 ~ 0 )) %>% 
+#   set_value_labels(dv_sex_hus_curr = c("Yes" = 1, "No"=0)) %>%
+#   set_variable_labels(dv_sex_hus_curr = "Person committing sexual violence: current husband/partner")
+
+```
+
+<u>**Question de recherche**</u> :  Les femmes ont-elles leurs mots à dire et sont-elles en même de mettre en oeuvre leurs décisions ? `Autrement dit, ont-elles, les moyens de leur politique ?`.
+
+<u>**Population cible**</u> : femme mariée ou en union libre âgée de 15-49 ans qui ont participé à l'enquête EDS en 2018 au Cameroun.
+
+<u>**Variable à expliquer**</u> : Nous nous intéressons à l'empowerment des femmes. Deux aspects sont pris en compte dans cette étude : la participation à la prise de décision (pouvoir), et la possession de ressources (avoir). S'agissant de la possession des ressources, ce concept fait référence au pouvoir économique et notamment à la capacité d'agir de la femme.
+
+-   Dans l'enquête EDS 2018 du Cameroun, quatre questions ont été posées aux femmes pour savoir qui avait le dernier mot dans certains domaines de prise de décision au sein du ménage. Il s'agit notamment des décisions concernant : `(Q1)` l'utilisation de l'argent gagné par la femme; `(Q2)` les soins de santé de la femme; `(Q3)` les achats importants du ménage et `(Q4)` les visites à la famille ou aux proches. Les réponses à ces questions allaient de la répondante seule (1) à la répondante et son mari/partenaire (2), en passant par le mari/partenaire seul (4), quelqu'un d'autre (5) et autre (6).
+
+-   Comme dans les études précédentes (Kritz & Makinwa-Adebusoye 1999 ; Nigatu et al. 2014 ; Steele & Goldstein 2006; Lamidi 2016 ...), les quatre éléments ont été encodés en une mesure ordinale du pouvoir de décision du ménage, de sorte qu'une valeur de `"0" indique une "absence" de décision de la femme` ; une valeur de `"1" indique une décision conjointe des partenaires` et une valeur de `"2" indique une décision exclusive de la femme`. Les questions Q2 à Q4 ont été utilisées pour créer un score de décision commun à toutes les femmes objet de notre étude. Ce score varie entre 0 et 6. la valeur de l'alpha de Cronbach associée à ce score de prise de décision vaut `r round(psy::cronbach(dbase %>% select(v743a_score:v743d_score))[['alpha']],2)` qui indique une bonne cohérence interne de notre échelle de mesure. La question Q1 a, quant à elle, été posée exclusivement aux femmes occupées professionnellement. Aussi, fera-t-elle l'objet d'une analyse distincte en respectant l'échelle de mesure susmentionnée. Une seconde mesure est également exploitée dans cette étude. Elle est une variable catégorielle ordinale qui prend la valeur `"0"qui indique une "absence" de décision de la femme` lorsque les variables Q2 à Q4 ont toutes la valeur 0; la valeur `"1" indique une décision conjointe des partenaires` lorsqu'au moins une des variables Q2 à Q4 à la valeur 1 et les autres ont une valeur inférieure ou égale à 0 et la valeur `"2" qui indique une décision exclusive de la femme` lorsqu'au moins une des variables Q2 à Q4 à la valeur 2 et les autres ont une valeur inférieur ou égale à 2.
+
+-   Pour ce qui est de la possession des ressources, elle est appréhendée au travers de deux variables la possession de la terre et la possession de la maison. Chacune des deux variables ont été encodées de la sorte, `"0" la femme ne possède pas la ressource`; `"1" la femme possède la ressource mais sans document officiel` (titre foncier ou titre de propriété) et `"2" la femme possède la ressource avec un document officiel` (titre foncier pour la terre et titre de propriété pour la maison). Ces 2 nouvelles variables ont été utilisées pour créer un score de possession de biens abrégé score de possession. Ce score de possession varie de 0 à 4. La valeur de l'alpha de Cronbach vaut `r round(psy::cronbach(dbase %>% select(possession_terre,score_possession))[['alpha']],2)` qui indique une cohérence interne acceptable de notre échelle de mesure.  Une seconde mesure est également exploitée dans cette étude. Elle est une variable catégorielle ordinale qui prend la valeur `"0"qui indique que la femme ne possède aucune ressource` lorsque les variables en jeux ont toutes la valeur 0; la valeur `"1" indique que la femme possède au moins une ressource sans document officiel` lorsqu'au moins une des variables d'intérêt à la valeur 1 et l'autre une valeur inférieure ou égale à 0 et la valeur `"2" qui indique que la femme possède au moins une ressource avec document officiel` lorsqu'au moins une des variables d'intérêt à la valeur 2 et l'autre une valeur strictement inférieur ou égale à 2.
+
+-  Une mesure quantitative de l'empowerment des femmes est proposée. C'est une variable catégorielle ordinale. Elle est construire à partir des variables catégorielles relatives à la prise de décision et à la possession des biens. 
+    - La valeur `0 indique une absence de pouvoir d'action`, c'est-à-dire que la femme ne possède aucune ressource et n'a pas de pourvoir décisionnel. 
+    - La valeur `1 indique un pouvoir d'action partiel`, autrement dit que la femme possède au moins une ressource sans document officiel ou qu'elle participe à la prise de décision au sein du ménage ou les deux.
+    - La valeur `2 indique un pouvoir d'action quasi total`, autrement dit la femme possède au moins une ressource avec un document officiel **`ou`** qu'elle décide seule sur au moins un des domaines suivants : sa santé, les achats importants du ménage et la visite à la famille ou aux proches. 
+    - La valeur `3 indique un pouvoir total`, autrement dit la femme possède au moins une ressource avec un document officiel **`et`** qu'elle décide seule sur au moins un des domaines suivants : sa santé, les achats importants du ménage et la visite à la famille ou aux proches
+
+<u>**Variables explicatives**</u>
+
+-   **Exposition aux médias.** Score construit sur la possession d'une télévision, la disposition d'internet et la possession d'un modbile. Chacune des variables est codée`0 pour la non possession` et `1 dans le cas contraire`. Le score construit varie de 0 à 3. Le score de crobach vaut `r round(psy::cronbach(dbase %>% select(tele:mobil))[['alpha']],2)` qui indique une cohérence interne acceptable de notre échelle de mesure.
+
+-   **Écart de niveau d'instruction entre conjoint.** Cette variable varie de -3 à 3 : -3 lorsque la femme n'a aucun niveau d'instruction et que son partenaire à un niveau d'instruction et 3 lorsque c'est l'inverse. Lorsque les conjoints ont un niveau d'instruction identique la valeur est 0.
+
+-   **Violences basées sur le genre.** Le module sur les relations dans le ménage administré au cours de l’EDS comprend un volet important sur la violence conjugale, c’est-à-dire la violence exercée par un conjoint/partenaire sur l’autre. Les questions aux femmes actuellement en union portaient sur le conjoint/partenaire actuel. Trois types de violences conjugales ont été pris en compte au cours de l’EDS. Il s’agit de la violence physique, la violence sexuelle et la violence émotionnelle. (cf. page 388 du rapport EDS 218 pour les définitions et autres élèments). Pour chaque type de violence, un score a été crée. Pour la violence physique, 7 questions ont été dichotomisées : 1 pour la survenue de la violence et 0 dans le cas contraire. Le score de violence physique varie de 0 à 8 et il a une valeur de conbrach de ```r round(psy::cronbach(dbase %>% select(d105a,d105b,d105c,d105d,d105e,d105f,d105j))[["alpha"]],2)```. La même chose a été faite avec les items permettant de mesurer les violences sexuelles et émotionnelles. Pour la violence sexuelle, 3 itens ont été utilisés pour le calcul de son score (compris entre 0 et 3 pour un alpha de crobach de ```r round(psy::cronbach(dbase %>% select(d105h,d105i,d105k))[["alpha"]],2)``` ) et 3 items (compres entre 0 et 3; alpha de conbach = ```r round(psy::cronbach(dbase %>% select(d103a,d103b,d103c))[["alpha"]],2)```). Un score unique  de violence a également été calculé qui varie entre 0 et 14 pour un alpha de combrach de ```r round(psy::cronbach(dbase %>% select(one_of(c(sprintf("d103%s",letters[1:3]),sprintf("d105%s",letters[c(1:6,8:11)])))))[["alpha"]],2)```. Au vu de la faiblesse de l'échelle de mesure pour ce qui est de la violence sexuelle, seule le score unique de violence sera utilisée pour les analyses.  
+
+- **Niveau de vie.** Voire la description de la construction de cette indice dans le document méthodologique de l'EDS. C'est une variable catégorielle ordinalle
+
+-  Ainsi que les variables suivantes : la religion; le statut matrimoniale (Union polygame vs Union monogame); le nombre d'enfant; le milieu de résidence (Rural vs Urbain); la région de résidence (les dix régions du Camerou); 
+
+# Statistiques descriptives
+
+## Description de la population sur la base des variables dépendantes
+
+
+<u>**Interprétations sommaires**</u> :
+
+-  En matière de prise de décision, un peu plus de deux femmes sur 10 prennent les décisions seules  : 10% pour ce qui de leur soins de santé, 11% pour les achats importants du ménage et 13% pour ce qui des visites à la famille/proches. Pour plus de la moitié des femmes (51%) la prise de décision se fait avec leur conjoint/partenaire : 48% pour ce qui est des soins de santé de la femme, 49% pour ce qui est des achats importants du ménage et 34% pour ce qui est des visites à la famille/proches). Sur une échelle de 0 à 6, où 0 indique une absence totale de participation à la prise de décision sur la santé de la femme, les achats importants du ménage et les visites à la famille/proches et 6 représentent une prise de décision exclusivement de la femme sur les 3 volets susmentionnés, au Cameroun, le pouvoir de prise de décision moyen de la femme est de 2,17. Ce qui est relativement faible.
+
+- En ce qui concerne la possession de ressources, 8 femmes sur 10 déclarent ne pas posséder de ressources (ni maison, ni terrain). Seulement 6% d'entre elles ont déclaré au moins une ressource avec un document officiel (titre de propriété ou titre foncier). S'agissant de ce dernier volet, les femmes possèdent plus fréquemment un terrain avec titre foncier qu'une maison avec titre de propriété `(40% vs 30%, p<0.001)`.<!-- prop.test(x = c(448,191), n = c(1507,289+191)) -->  Sur une échelle de 0 à 4, où 0 indique aucune possession et 4 représente les femmes qui disposes à la fois d'un terrain avec titre foncier et d'une maison avec titre de propriété, au Cameroun, le score moyen de possession de ressources d'une femme est de 0.5. Une femme sur 2 a un score de possession de 0. 
+
+- Pour ce qui est de la prise de décision en matière d'utilisation des gains de la femme, notamment pour les femmes occupées, plus de la moitié des femmes (52%) déclare décider seule de l'utilisation de leurs gains. Toutefois, à peu près 7% des femmes occupées déclarent que la prise de décision en matière d'utilisation de leurs gains est faite par leur conjoint/partenaire seul ou par une tierce personne.
+
+- Plus d'une femme sur 2 (51%) dispose d'un pouvoir d'action partiel. A peine 2% on pouvoir d'action total et 28% n'ont aucun pouvoir d'action.
+
+**BELL** : <u>Il faut vérifie le codage de la variable possession du titre de propriété pour les terres. Tu as 6983 valeurs manquantes alors que l'on devrait avoir que tu as 6220 femmes déclarant ne pas avoir de terres. Ci-dessus les 763 valeurs manquantes ont été considérées comme ne possédant pas de titre foncier. En principe on devrait avoir plus de femmes déclarant avoir des maisons avec titre de propriété que de femmes déclarant des terrais avec titre de propriété (30% vs 15%, p<0.001) </u>
+
+```{r echo=FALSE}
+
+varlist <- c(
+  # variables dépendantes
+  "decision_sante","decision_achat","decision_visite","decision","score_decision",
+  "p_maison","titre_m","p_terre","titre_t","possession","score_possession",
+  "utilisation_gain","empowerment"
+)
+
+dbase %>% select(all_of(varlist)) %>% to_factor() %>% 
+  tbl_summary(
+    statistic = list(
+      score_decision = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      score_possession = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}")
+    ),
+    type = list(score_decision  ~ 'continuous2', score_possession  ~ 'continuous2'),
+    missing = "always"
+  )
+
+```
+
+
+## Prise de décision et caractéristiques sociodémographiques
+
+[**`Interprétation sommaire des résultats`**]
+
+-   Toutes les variables explicatives envisagées et listées dans le tableau ci-dessous sont significativement associées au seuil de 5% à la prise de décision (variable catégorielle). Une exception est observée pour ce qui est du nombre d'enfants vivants (p=0.11).
+
+-   Pour les femmes qui décident seules, en moyenne le score de prise de décision vaut 4 contre 2,6 pour celles qui décident conjointement avec leur conjoint/partenaire et 0 pour celle où les conjoints/partenaires décident seuls. [`Rien d'anormal`. _Cela corrobore juste la bonne qualité de notre indicateur_].
+
+- Au Cameroun, en milieu rural et au sein des couples, les hommes, par rapport aux femmes, prennent plus souvent seuls les décisions relatives à la santé de la femme, les achats importants du ménage et les visites à la famille/aux proches (63% contre 45%, p<0.001). La tendance inverse est observée en milieu urbain. 
+
+- Parmi les 20% des ménages les plus riche, les femmes qui décident seules sont plus fréquentes que celles pour lesquelles le conjoint/partenaire décident seule (23% contre 7%, p<0.001). La tendance inverse est observée parmi les 20% des ménages les plus pauvres, où les femmes qui déclarent que leur conjoint/partenaire décide seul sont plus fréquentes que celles qui déclarent décider seule (33% contre 11%, p<0.0001).
+
+- Globalement, près de 9 femmes sur 10 (88%) déclarent vivre habituellement avec leur conjoint/partenaire. Cela est principalement plus fréquent chez les femmes qui déclarent que leur conjoint/partenaire décide seul que chez celles qui déclarent décider seule (91% contre 80%,p<0.001)
+
+- Globalement, un peu plus de 7 femmes sur 10 (73%) de notre population d'étude sont occupées. Les femmes qui déclarent décider seule sont plus souvent occupées que celles qui déclarent que leur conjoint/partenaire décide seul (84% contre 58%, p<0.001).
+
+- La majorité de la population est constituée de chrétiens (68% contre 28% de musulmans). Les femmes qui déclarent plus souvent décider seule sont plus fréquentes parmi les chrétiens que celle qui déclarent que leur conjoint/partenaire décide seul (83% contre 40%, p<0.001). La tendance inverse est observée parmi les musulmans (11% contre 55%, p<0.001).
+
+- Globalement, trois femme sur 4 (75%) vit dans des ménages de taille supérieure ou égale à 5 ; les femmes qui déclarent décider seule moins souvent que celles qui déclarent que leur conjoint/partenaire décide seul (71% contre 76%, p=0.002)
+
+- Globalement les femmes plus âgées que leur conjoint/partenaire sont moins fréquentes dans la population d'étude (3%). Parmi celles-ci, les femmes qui déclarent décider seules sont plus fréquentes que celles qui déclarent que leur conjoint/partenaire décide seul (4% contre 2%, p=0.003).
+
+- Les femmes qui déclarent décider seules sont en moyenne plus exposés aux médias que celles qui déclarent que leur conjoint/partenaire décide seul (1,63 contre 0,85, p<0.001).
+
+- Globalement, le score moyen de violences basées sur le genre est de 1,4 ce qui est relativement faible. Toutefois, les femmes qui déclarent décider seule ont une score moyen de VBG de 2.0 contre 1.2 pour celles qui déclarent que leur conjoint/partenaire décide seul (p<0.001)
+
+- [`Bien vouloir poursuivre l'interprétation .... `]
+
+[_Toutes les valeurs dans la colonne **Total** peuvent être interprétee dans la section 2.1. Qu'importe la section qui sera retenue pour leur interprétation, ces valeurs ne seront interprétées qu'une seule fois._]
+
+```{r echo=FALSE}
+
+varlist <- c(
+  # variables dépendantes
+  "decision","score_decision",
+  # variables explicatives
+  "milieu","niveau","resid","occup","nb_enfant","religion","taillem",
+  "age", "eage","expo_media","vbg_score","region","regim","instruc_f"
+)
+
+dbase %>% select(all_of(varlist)) %>% to_factor() %>% 
+  tbl_summary(
+    by="decision",
+    statistic = list(
+      score_decision = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # ecart_age_conjoint = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      expo_media = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      vbg_score = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}")#,
+      # violence_physique = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_sexuelle = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_emotionnelle = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}")
+    ),
+    type = list(score_decision  ~ 'continuous2', #ecart_age_conjoint ~ 'continuous2',
+                # violence_physique ~ 'continuous2',violence_sexuelle ~ 'continuous2', 
+                # violence_emotionnelle  ~ 'continuous2', 
+                expo_media ~ 'continuous2',vbg_score ~ 'continuous2'),
+    missing = "always"
+  ) %>% add_overall() %>% add_p()
+
+```
+
+
+## Possession des biens et caractéristiques sociodémographiques
+
+[**`Interprétation sommaire des résultats`**]
+
+- La résidence habituelle du conjoint/partenaire (p=0.09) et l'écart d'âge entre conjoints (p=0.6) ne sont pas statistiquement associés au seuil de 5% à la possession des biens (pouvoir économique). Toutefois, pour le modèle multivariée la résidence habituelle du conjoint/partenaire qui a une p-valeur (probabilité que le hasard explique à lui seul l'association) inférieure à 0.2 sera pris en compte.
+
+- Par soucis d'harmonie, dans les modèles multivariés le nombre d'enfant vivant qui n'est associé qu'à la possession de ressources (pouvoir économique) et pas au pouvoir décisionnel ne sera pas pris en compte. Seule la taille du ménage sera pris en compte. Ce d'autant plus que la taille du ménage inclut le nombre d'enfant vivant avec la femme dans le ménage.
+
+- Les femmes qui possèdent au moins une ressource avec document officiel résident plus fréquemment en milieu urbain que celles qui ne possède aucune ressource (73% contre 48%, p<0.001). En milieu rural, on dénombre plus souvent des femmes qui possèdent des ressources sans titre de propriété que de femmes qui possèdent des ressources avec titre de propriété (68% contre 27%, p<0.001).
+
+- [`Bien vouloir poursuivre l'interprétation ....`]
+
+```{r echo=FALSE}
+
+varlist <- c(
+  # variables dépendantes
+  "possession","score_possession",
+  # variables explicatives
+  "milieu","niveau","resid","occup","nb_enfant","religion","taillem",
+  "age", "eage","expo_media","vbg_score","region","regim","instruc_f"
+)
+
+dbase %>% select(all_of(varlist)) %>% to_factor() %>% 
+  tbl_summary(
+    by="possession",
+    statistic = list(
+      # score_decision = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      score_possession = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # utilisation_gain = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # ecart_age_conjoint = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      expo_media = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      vbg_score  = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}")#,
+      # violence_physique = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_sexuelle = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_emotionnelle = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}")
+    ),
+    type = list(#score_decision  ~ 'continuous2',
+                score_possession  ~ 'continuous2',
+                # utilisation_gain  ~ 'continuous2',ecart_age_conjoint ~ 'continuous2',
+                # violence_physique ~ 'continuous2',violence_sexuelle ~ 'continuous2', 
+                # violence_emotionnelle  ~ 'continuous2', 
+                expo_media ~ 'continuous2', vbg_score ~ 'continuous2' ),
+    missing = "always"
+  ) %>% add_overall() %>% add_p()
+
+```
+
+## Empowerment et caractéristiques sociodémographiques
+
+[**`Interprétation sommaire des résultats`**]
+
+- Les femmes qui déclarent décider seule ont un pouvoir d'action quasi total ou total alors que celles qui déclarent que leur conjoint/partenaire décide seule n'ont aucun pouvoir d'action. [_`Normal` au regard de la construction de la variable. Ceci permet juste de vérifie la construction de la variable._]
+
+- Les femmes qui ont un pouvoir d'action total détiennent plus souvent des ressources avec titre de propriété que les autres (p<0.001). Celles qui n'ont aucun pouvoir d'action, comparativement à celles qui ont un pouvoir d'action partiel ou quasi totale, sont plus fréquemment celles qui n'ont aucune ressource (resp. 91% contre 76% et 91% contre 81%, p<0.001 pour les deux).
+
+- Le pouvoir d'action de la femme tend à augmenter avec le score moyen de prise de décision . C'est également le cas avec le score moyen de possession.  Une baisse notable du score moyen de possession est observé entre les femmes qui ont un pouvoir d'action partiel et cellse qui ont un pouvoir d'action quasi total.
+
+- [`Bien vouloir poursuivre l'interprétation .... `]
+
+```{r echo=FALSE}
+
+# - La p-valeur de religion n'a pas pu être estimée du fait de la présence d'un effectif en dessous de 5 pour un croisement. Toutefois, les femmes qui ont un pouvoir d'action total sont plus souvent chrétiennes que celles qui n'ont aucun pouvoir d'action (89% contre 40%, p<0.001). Chez les musulmans, on dénombre plus souvent de femmes qui n'ont aucun pouvoir d'action que celles qui ont un pouvoir d'action total (55% contre 8%, p<0.001).
+# 
+# - Les femmes qui ont un pouvoir d'action quasi total ont un score moyen de VBG de 2.0 contre 1.2 pour celle qui n'ont aucun pouvoir d'action en moyenne
+
+varlist <- c(
+  # variables dépendantes
+  "empowerment",
+  # variables explicatives
+  "decision","score_decision",
+  "possession","score_possession",
+  "utilisation_gain",
+  # variables explicatives
+  "milieu","niveau","resid","occup","nb_enfant","religion","taillem","nb_enfant",
+  "age", "eage","expo_media","vbg_score","regim","instruc_f","region"
+)
+
+suppressMessages(dbase %>% select(all_of(varlist)) %>% to_factor() %>% 
+  tbl_summary(
+    by="empowerment",
+    statistic = list(
+      score_decision = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      score_possession = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # ecart_age_conjoint = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      expo_media = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      nb_enfant  = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_physique = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_sexuelle = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_emotionnelle = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      vbg_score = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}")
+    ),
+    type = list(score_decision  ~ 'continuous2',
+                score_possession  ~ 'continuous2',
+                # utilisation_gain  ~ 'continuous2',ecart_age_conjoint ~ 'continuous2',
+                # violence_physique ~ 'continuous2',violence_sexuelle ~ 'continuous2', 
+                # violence_emotionnelle  ~ 'continuous2', 
+                nb_enfant ~ 'continuous2',
+                expo_media ~ 'continuous2',vbg_score ~ 'continuous2'
+                ),
+    missing = "always"
+  ) %>% add_overall() %>% add_p())
+```
+
+## Utilisation des gains des femmes occupées [`Non recommandée`]
+
+[**`Interprétation sommaire des résultats`**]
+
+- Le milieu de résidence (p=0.6), la taille du ménage (p=0.2) ne sont pas statistiquement associé au seuil de signification de 5%. Ces variables ont toutes deux des p-valeur >= 0.2, aussi ne seront-elles pas intégrées dans le modèle multivariée.
+
+- Les femmes occupés qui déclarent décider avec leur conjoint/partenaire de l'utilisation de leurs gains ont un score moyen d'exposition aux médias supérieure à celles qui déclare que leur conjoint/partenaire décide seul (1.55 contre 1.34, p=0.002) ou celles qui déclarent décider seule (1.55 contre 1.38, p<0.001).
+
+- Les femmes occupés qui déclarent décider seule de l'utilisation de leurs gains ont un score moyen d'exposition aux VBG supérieure à celles qui déclare que leur conjoint/partenaire décide seul (1.81 contre 1.32, p=0.006) ou celles qui déclarent décider avec leur conjoint/partenaire (1.81 contre 1.5, p=0.004).
+
+- [`Bien vouloir poursuivre l'interprétation .... `]
+
+```{r echo=FALSE}
+
+#  Test de moyen
+# t.test( expo_media ~ utilisation_gain, dbase %>%  filter(utilisation_gain!=2,var.equal=TRUE) %>% to_factor())
+# t.test( expo_media ~ utilisation_gain, dbase %>%  filter(utilisation_gain!=0,var.equal=TRUE) %>% to_factor())
+
+# t.test( vbg_score ~ utilisation_gain, dbase %>%  filter(utilisation_gain!=1,var.equal=TRUE) %>% to_factor())
+# t.test( vbg_score ~ utilisation_gain, dbase %>%  filter(utilisation_gain!=0,var.equal=TRUE) %>% to_factor())
+
+varlist <- c(
+  # variables dépendantes
+  "utilisation_gain",
+  # variables explicatives
+  "milieu","niveau","resid","nb_enfant","religion","taillem","age", "eage","expo_media","vbg_score",
+  "region","regim","instruc_f"
+)
+
+dbase %>% select(all_of(varlist)) %>% to_factor() %>% 
+  filter(!is.na(utilisation_gain)) %>% 
+  tbl_summary(
+    by="utilisation_gain",
+    statistic = list(
+      # score_decision = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # score_possession = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # utilisation_gain = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # ecart_age_conjoint = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      expo_media = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_physique = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_sexuelle = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      # violence_emotionnelle = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}"),
+      vbg_score = c("{mean} ({sd})","{median} ({p25}; {p75})","{min}; {max}")
+    ),
+    type = list(#score_decision  ~ 'continuous2', score_possession  ~ 'continuous2',
+                # utilisation_gain  ~ 'continuous2',ecart_age_conjoint ~ 'continuous2',
+                # violence_physique ~ 'continuous2',violence_sexuelle ~ 'continuous2', 
+                # violence_emotionnelle  ~ 'continuous2',
+                vbg_score  ~ 'continuous2',
+                expo_media ~ 'continuous2' ),
+    missing = "always"
+  )  %>% add_overall() %>% add_p()
+
+```
+
+
+# Analyse multivariée
+
+## Pouvoir décisionnel
+
+### Modèle de régression linéaire
+
+[**`Interprétation sommaire des résultats`**]
+
+Toutes choses égalent par ailleurs : 
+
+-  L'écart d'âge entre conjoints (p=0.443), Le régime matrimonial (p=0.643), la taille du ménage (0.180), l'exposition au violence basée sur le genre (p=0.286) et le milieu de résidence (p=0.518) n'ont pas d'effets statistiquement significatifs en matière de prise de décision au sein du couple.
+
+- L'augmentation de l'exposition aux médias (p=0.024), du niveau de vie du ménage (p=0.025) et du niveau d'instruction de la femme (p=0.022)  ainsi que le fait d'être occupée professionnelle augmente le pouvoir décisionnel de la femme.
+
+- Lorsque le conjoint/partenaire vit habituellement dans le ménage (p<0.001); que la femme est de religion musulmane plutôt que chrétienne (p<0.001) diminue le pouvoir décisionnel de la femme.
+
+- Il existe une dimension spatiale du pouvoir décisionnel de la femme. Lorsque la femme réside dans l'extrême-nord ou dans le Nord plutôt que dans l'Adamaoua le pouvoir décisionnel de la femme tend à s'amenuiser (p<0.001). La tendance inverse est observée lorsque la femme réside dans les régions du Centre, de l'Est, du Littoral et du Sud.
+
+
+- [`Bien vouloir poursuivre l'interprétation .... `]
+
+```{r echo=FALSE,fig.height=5}
+
+# # variables dépendantes
+# "eage","expo_media","regim"",niveau","taillem","resid", "vbg_score","religion","milieu",region","occup"
+
+mod_pd_mco <- lm(score_decision ~ expo_media + ecart_age_conjoint + polygamie + nivie + taillem+
+                   residence_partenaire + nivins_femme + vbg_score + religion + milieu_rural +
+                   region + occup,
+          data = dbase %>% to_factor())
+
+# varriables signficatives
+# print(drop1(mod_pd_mco, .~., test = "F"))
+
+```
+
+[**`Graphique à insérer éventuellement dans le document`**]
+
+```{r echo=FALSE, fig.height=7}
+ggstats::ggcoef_model(mod_pd_mco)
+```
+
+[**`Annexe possible`**]
+
+```{r echo=FALSE}
+mod_pd_mco %>% tbl_regression(intercept = TRUE) #%>% add_global_p()
+```
+
+### Modèle de régression logistique ordonnée
+
+```{r echo=FALSE,fig.height=5}
+
+# # variables dépendantes
+mod_pd_mlo <- MASS::polr(decision ~ expo_media + eage + regim + niveau + taillem + resid +
+                           instruc_f + vbg_score + religion + milieu + region + occup,
+          data = dbase %>% to_factor())
+
+# Mon modèle...
+# mod_pd_mlo <- MASS::polr(decision ~ expo_media + ecart_age_conjoint + polygamie + nivie + taillem+
+#                            residence_partenaire + nivins_femme + vbg_score + religion + milieu_rural +
+#                            region + occup,
+#           data = dbase %>% to_factor())
+```
+
+[**`Interprétation sommaire des résultats`**]
+
+Toutes choses égalent par ailleurs : 
+
+- L'exposition aux médias, la situation de résidence du conjoint/partenaire, le niveau d'instruction de la femme, l'exposition aux VBG, la religion, la région de résidence et la situation d'occupation de la femme sont tous associés au pouvoir décisionnel de la femme.
+
+- Pour chaque augmentation d'une unité du score d'exposition aux médias, la probabilité une femme de participer à la prise de décision (c'est-à-dire une décision exclusive de la femme ou conjointe des deux partenaires par rapport à une décision exclusive d'un conjoint/partenaire) est multiplié par 1,11 fois (autrement dit augmente de 11%, p=0.032).
+
+- Pour les femmes qui ne vivent pas habituellement avec leur conjoint/partenaire, la probabilité de participer à la prise de décisions est de 1.98 fois celle dont des femmes vivent habituellement avec leur conjoint/partenaire (p<0.001). 
+
+- Pour les femmes ayant niveau d'instruction secondaire, la probabilité de participer à la prise de décisions est de 1,36 fois celle des femmes n'ayant aucun niveau d'instruction formelle (p=0.009). Il n'y a aucune différence statistiquement significative au seuil de 5% entre celle n'ayant aucun niveau d'instruction formelle et les autres (supérieure, p=0.146 ; primaire, p=0.25)
+
+- Pour chaque augmentation d'une unité du score de violence basée sur le genre, la probabilité pour une femme de participer à la prise de décision est multiplié par 1.05 fois (autrement dit augment de 5%, p<0.001).
+
+- Pour les femmes musulmanes, la probabilité de participer à la prise de décisions est de 59% inférieure à celle des femmes chrétiennes (p<0.001). Autrement dit les femmes chrétiennes ont 24.5 fois plus de chance de participer à la prise de décision au sein du couple que les femmes musulmanes.
+
+- Pour les femmes occupées, la probabilité de participer à la prise de décisions au sein du couple est 2 fois celle des femmes non occupé.
+
+- Pour les femmes vivantes dans les régions du Centre, du Littoral, du Nord-ouest, de l'Ouest, du Sud et du Sud-ouest, la probabilité de participer à la prise de décision au sein du couple est plus importante que pour celles vivantes dans l'Adamaoua. La tendance inverse est observée pour celle résidente dans la région du Nord. Aucune différence statistiquement significative n'est observée pour celles résidentes à l'Est (p=0.071) et à l'Extrême-nord (p=0.461).
+
+- [`Bien vouloir poursuivre l'interprétation... `] 
+
+
+[**`Graphique à insérer éventuellement dans le document`**]
+
+```{r echo=FALSE, fig.height=8}
+# Affichage du forestplor plus rapide...
+suppressMessages(ggstats::ggcoef_model(mod_pd_mlo,exponentiate=TRUE))
+```
+
+[**`Annexe possible`**]
+
+```{r echo=FALSE}
+# suppressMessages(mod_pd_mlo %>% tbl_regression(intercept = TRUE,exponentiate=TRUE) %>% add_global_p())
+
+# summary(mod_pd_mlo)
+# # summary ne donne pas les p-value donc oblige de les calculer manuellement
+# ctable <- coef(summary(mod_pd_mlo))
+# p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+# signif <- ifelse(p<0.001,"***",
+#                  ifelse(p>=0.001 & p<0.01,"**",
+#                         ifelse(p>=0.01 & p<0.05,"*",
+#                                ifelse(p>=0.05 & p<0.1,".",""))))
+# # Affichage du resultat
+# (ctable <- cbind(ctable, "p value" = round(p,3),"signif"=signif))
+# exp(cbind(OR = coef(mod), confint(mod)))
+
+suppressMessages(mod_pd_mlo %>% tbl_regression(intercept = TRUE,exponentiate=TRUE) %>% add_global_p())
+
+```
+
+## Pouvoir économique
+
+### Modèle de régression linéaire
+
+[**`Interprétation sommaire des résultats`**]
+
+Toutes choses égalent par ailleurs :
+
+-  L'écart d'âge entre conjoint (p<0.001), la taille de ménage (p=0.006), le nombre d'enfant vivant de la femme (p<0.001), la religion (p=0.002) et la region sont des variables toutes significativement associées au seuil de 5% au score de possession de ressources (pouvoir économique de la femme).
+
+- Bien que non significativement associé au seuil de 5%, la situation de résidence du conjoint/partenaire dans le ménage (p=0.053) et le niveau d'instruction de la femme (p=0.069) indique des tendances d'intérêt (car leur p-value est inférieure à 0.1).
+
+- Plus l'homme est plus âgé que la femme, plus le pouvoir économique (score de possession de ressource) augmente. La même tendance est observé pour ce qui est du nombre d'enfants de la femme.
+
+-  Plus la taille de ménage augmente, moins la femme a de pouvoir économique. Les femmes musulmanes ont moins de pouvoir économique que les femmes chrétiennes (p=0.001).
+
+- Comparativement aux femmes résidantes dans la région de l'Adamaoua, les femmes résidantes dans les régions du Sud, Ouest et Nord-ouest ont plus de pouvoir économique (dans l'ordre croissant de leur énumération). Tandis que celles des régions du Nord et de l'extrême ont moins de pouvoir économique (dans l'ordre décroissant de leur énumération) que celles de la région de l'Adamaoua. Aucune différence statistiquement significative au seuil de 5% n'a été observée entre les femmes de l'Adamoua et celle des régions du Centre, de l'Est, du Littoral et du Sud-ouest.
+
+- Le statut d'occupation de la femme et le niveau d'instruction de la femme n'ont pas d'effets statistiquement significatif sur le pouvoir économique de la femme. [`à discuter`]
+
+- [`Bien vouloir poursuivre l'interprétation .... `]
+
+```{r echo=FALSE,fig.height=5}
+
+mod_pe_mco <- lm(score_possession ~ expo_media + ecart_age_conjoint + polygamie + nivie + taillem + nb_enfant +
+                   residence_partenaire + nivins_femme + vbg_score + religion + milieu_rural + occup +
+                   region,
+          data = dbase %>% to_factor())
+
+# Pour identifier les variables significatives du modele
+# drop1(mod_pe_mco, .~., test="F")
+
+```
+
+[**`Graphique à insérer éventuellement dans le document`**]
+
+```{r echo=FALSE, fig.height=7}
+ggstats::ggcoef_model(mod_pe_mco)
+```
+
+[**`Annexe possible`**]
+
+```{r echo=FALSE}
+mod_pe_mco %>% tbl_regression(intercept = TRUE)
+```
+
+### Modèle de régression logistique ordonnée
+
+[**`Interprétation sommaire des résultats`**]
+
+Toutes choses égales par ailleurs :
+
+- L'exposition aux médias (p=0.015), l'écart d'âges entre conjoints (p=0.010), le niveau de vie du ménage (p=0.025), la taille du ménage (p=0.043), le nombre d'enfants vivants (p<0.001), la situation de résidence avec le conjoint/partenaire (p=0.038), le niveau d'instruction de la femme (p=0.014), la religion (p<0.001) et la région de résidence (p<0.001) ont tous un effet statistiquement significatif au seuil de 5% sur la probabilité d'une femme de disposer de ressources et donc d'avoir du pouvoir économique (possession de ressources avec ou sans document de propriété par rapport à une non possession de ressources).
+
+- Pour chaque augmentation d'une unité du score d'exposition aux médias, la probabilité pour une femme d'avoir du pouvoir économique (possession de ressources avec ou sans document de propriété contre une non possession de ressources) diminue de 14% ( est divisée par 2.17).
+
+- Pour chaque augmentation d'une unité du nombre d'enfants vivants, la probabilité pour une femme d'avoir du pouvoir économique (possession de ressources avec ou sans document de propriété contre une non possession de ressources) est multiplié par 1.3 fois (augmente de 26%).
+
+- Pour les femmes de niveau d'instruction primaire ou secondaire, la probabilté d'avoir du pouvoir économique est respectivement 1.4 fois et 1.6 fois celle des femmes qui n'ont aucun niveau d'instruction formelle (resp. p=0.028 et p=0.005). Il n'y aucune différence statistiquement significative en matière de pouvoir économique entre les femmes de niveau d'instruction supérieure et celles qui n'ont aucun niveau d'instruction formelle (p=0.665)
+
+- Le statut d'occupation de la femme n'est statistiquement pas associé à la probabilité d'avoir du pouvoir économique.
+
+- [`Bien vouloir poursuivre l'interprétation .... `]
+
+```{r echo=FALSE,fig.height=5}
+
+## Modèle avec les variables de Bell IV
+mod_pe_mlo <- MASS::polr(possession ~ expo_media + eage + regim + niveau + taillem + nb_enfant + resid +
+                           instruc_f + vbg_score + religion + milieu + occup + region,
+          data = dbase %>% to_factor())
+
+## Mon modèle...
+# mod_pe_mlo <- MASS::polr(possession ~ expo_media + ecart_age_conjoint + polygamie + nivie + taillem +
+#                            nb_enfant + residence_partenaire + nivins_femme + vbg_score + religion + 
+#                            milieu_rural + occup + region,
+#           data = dbase %>% to_factor())
+
+```
+
+[**`Graphique à insérer éventuellement dans le document`**]
+
+```{r echo=FALSE, fig.height=10}
+suppressMessages(ggstats::ggcoef_model(mod_pe_mlo,exponentiate = TRUE))
+```
+
+[**`Annexe possible`**]
+
+```{r echo=FALSE}
+
+# suppressMessages(mod_pe_mlo %>% tbl_regression(intercept = TRUE,exponentiate=TRUE) %>% add_global_p())
+
+# summary(mod_pe_mlo)
+# # summary ne donne pas les p-value donc oblige de les calculer manuellement
+# ctable <- coef(summary(mod_pe_mlo))
+# p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+# signif <- ifelse(p<0.001,"***",
+#                  ifelse(p>=0.001 & p<0.01,"**",
+#                         ifelse(p>=0.01 & p<0.05,"*",
+#                                ifelse(p>=0.05 & p<0.1,".",""))))
+# # Affichage du resultat
+# (ctable <- cbind(ctable, "p value" = round(p,3),"signif"=signif))
+# exp(cbind(OR = coef(mod_pe_mlo), confint(mod_pe_mlo)))
+
+suppressMessages(mod_pe_mlo %>% tbl_regression(intercept = TRUE,exponentiate=TRUE) %>% add_global_p())
+```
+
+
+## Pouvoir et avoir : empowerment des femmes au cameroun
+
+Vu la nature de la variable, ici nous n'appliquons que le modèle de régression logistique ordonnée.
+
+[**`Interprétation sommaire des résultats`**]
+
+Toutes choses étant égales par ailleurs :
+
+- Pour chaque augmentation d'une unité du pouvoir décisionnel de la femme, la probabilité de disposer d'un empowerment (c'est-à dire un pouvoir d'action partiel, quaisi total ou total contre aucun) est multiplié est multiplié par 10,5 fois (p<0.001).
+
+- Pour chaque augmentation d'une unité du pouvoir économique, la probabilité de disposer d'un empowerment est multiplé pqr 1.2 fois (augment de 20%, p<0.001)
+
+- Pour chaque augmentation d'une unité du score d'exposition aux VBG, la propbabilité pour une femme de diposer d'un empowerment augmente de 7% (p<0.0001).
+
+
+- La région de résidence de la femme a un effet statistiquement significatif sur l'empowerment des femmes. Pour les femmes vivants dans les régions du Centre, de l'Extrême-Nord, du Littoral, du Nord-ouest, de l'Ouest et du Sud-ouest, la  probabilité de disper d'un empowerment augmente significative. Pour les autres régions aucune différence statisquement significative au seuil de 5% n'a été observée.
+
+- [`Bien vouloir poursuivre l'interprétation .... `]
+
+```{r echo=FALSE,fig.height=5}
+
+## Modèle avec les variables de Bell IV
+# mod_pa_mlo <- MASS::polr(empowerment ~ score_decision + score_possession + expo_media + eage + regim + niveau + 
+#                            taillem + nb_enfant + resid +
+#                            instruc_f + vbg_score + religion + milieu  + occup + region,
+#           data = dbase %>% to_factor())
+
+## Mon modèle... full
+# mod_pa_mlo <- MASS::polr(empowerment ~ score_decision + score_possession + 
+#                            expo_media + ecart_age_conjoint + polygamie + nivie + taillem +
+#                            nb_enfant + residence_partenaire + nivins_femme + vbg_score + religion + milieu_rural +
+#                            occup + region,
+#           data = dbase %>% to_factor())
+
+mod_pa_mlo <- MASS::polr(empowerment ~ score_decision + score_possession + #utilisation_gain +
+                           expo_media + eage + regim + niveau + taillem + nb_enfant +
+                           resid + instruc_f + vbg_score + religion + milieu +
+                           occup + region,
+          data = dbase %>% to_factor())
+
+# mod_pa_mlo <- MASS::polr(empowerment ~ score_decision + score_possession + #utilisation_gain +
+#                            expo_media + vbg_score + region,
+#           data = dbase %>% to_factor())
+
+```
+
+[**`Graphique à insérer éventuellement dans le document`**]
+
+```{r echo=FALSE,fig.height=8}
+suppressMessages(ggstats::ggcoef_model(mod_pa_mlo,show_p_values = TRUE,exponentiate = TRUE))
+```
+
+[**`Annexe possible`**]
+
+```{r echo=FALSE}
+
+# suppressMessages(mod_pa_mlo %>% tbl_regression(intercept = TRUE,exponentiate=TRUE) %>% add_global_p())
+
+# summary(mod_pa_mlo)
+# # summary ne donne pas les p-value donc oblige de les calculer manuellement
+# ctable <- coef(summary(mod_pa_mlo))
+# p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+# signif <- ifelse(p<0.001,"***",
+#                  ifelse(p>=0.001 & p<0.01,"**",
+#                         ifelse(p>=0.01 & p<0.05,"*",
+#                                ifelse(p>=0.05 & p<0.1,".",""))))
+# # Affichage du resultat
+# (ctable <- cbind(ctable, "p value" = round(p,3),"signif"=signif))
+# exp(cbind(OR = coef(mod_pa_mlo), confint(mod_pa_mlo)))
+
+suppressMessages(mod_pa_mlo %>% tbl_regression(intercept = TRUE,exponentiate=TRUE) %>% add_global_p())
+```
+
+## Prise de décision en matière d'utilisation des gains chez les femmes occupées [`non recommandée`]
+
+Vu la nature de la variable, ici nous n'appliquons que le modèle de régression logistique ordonnée.
+
+```{r echo=FALSE,fig.height=5}
+# Estimation du modele
+## Modèle avec les variables de Bell IV
+mod_gain_mlo <- MASS::polr(utilisation_gain ~ expo_media + eage + regim + niveau + taillem + nb_enfant + resid +
+                           instruc_f + vbg_score + religion + milieu + region,
+          data = dbase %>% to_factor() %>% filter(!is.na(utilisation_gain)))
+
+## Mon modèle...
+# mod_gain_mlo <- MASS::polr(utilisation_gain ~ expo_media + ecart_age_conjoint + polygamie + nivie + taillem +
+#                            nb_enfant + residence_partenaire + nivins_femme + vbg_score + religion + milieu_rural +
+#                            region,
+#           data = dbase %>% to_factor() %>% filter(!is.na(utilisation_gain)))
+
+```
+
+[**`Interprétation sommaire des résultats`**]
+
+Le régime matrimonial de la femme (p<0.001), la situation de résidence du conjoint/partenaire (p<0.001), le niveau de violences basées sur le genre (p<0.001), la religion (p=0.036), le milieu de résidence (p=0.049) ainsi que la région de résidence du ménage (p<0.001) ont un effet statistiquement significatif au seuil de 5% sur la probabilité que la femme occupée participe à la prise de décision en matière d'utilisation de ses gains (c'est-à-dire une décision exclusive de la femme ou conjointe des deux partenaires par rapport à une décision exclusive d'un conjoint/partenaire) . Ainsi, **toutes choses égales par ailleurs** (_autrement dit toutes les autres variables explicatives constantes_) :  
+
+- Pour les femmes occupées en situation de polygamie, la probabilité qu'elle participe à la prise de décision en matière d'utilisation de leurs gains (c'est-à-dire une décision exclusive de la femme ou conjointe des deux partenaires par rapport à une décision exclusive d'un conjoint/partenaire) est 1,7 fois celle des femmes qui sont en situation de monogamie. Autrement dit, la probabilité pour une femme de participer à la prise de décision en matière d'utilisation de leurs gains est moindre pour celles qui sont en union monogame que pour celles qui sont en union polygame. 
+
+-  Pour les femmes occupées qui vivement habituellement avec leur conjoint, la probabilité qu'elle participe à la prise de décision en matière d'utilisation de leurs gains (c'est-à-dire une décision exclusive de la femme ou conjointe des deux partenaires par rapport à une décision exclusive d'un conjoint/partenaire) est inférieure de 54% [100*(1-0.46)] à celle des femmes qui ne vivent pas habituellement avec leur conjoint. [_Pour les femmes qui ne vivent pas habituellement avec leur conjoint/partenaire, la probabilité de participer aux décisions en matière d'utilisation de ses gains est 2.17 fois (1/0.46) celle dont des femmes vivent habituellement avec leur conjoint/partenaire._] Autrement dit, lorsque le conjoint/partenaire vit habituellement dans le ménage, la participation de la femme occupée à la prise de décision en matière d'utilisation de leurs gains est moins probable que lorsque le conjoint/partenaire ne vit pas habituellement dans le ménage.
+
+- Pour chaque augmentation d'une unité du score de violence basée sur le genre, la probabilité pour une femme occupée de participer à la prise de décision en matière d;utilisation de ses gains est multiplié par 1,11 fois (autrement dit augmente de 11%), toutes les autres variables explicatives restant constantes.  
+
+- [`Bien vouloir poursuivre l'interprétation... ` pour la religion, le milieu de résidence ainsi que la région de résidence] 
+
+
+[**`Graphique à insérer éventuellement dans le document`**]
+
+```{r echo=FALSE, fig.height=9}
+# Affichage du forestplor plus rapide...
+suppressMessages(ggstats::ggcoef_model(mod_gain_mlo,exponentiate=TRUE))
+```
+
+
+[**`Annexe possible`**]
+
+```{r echo=FALSE}
+
+# summary(mod_gain_mlo)
+## summary ne donne pas les p-value donc oblige de les calculer manuellement
+# ctable <- coef(summary(mod_gain_mlo))
+# p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+# signif <- ifelse(p<0.001,"***",
+#                  ifelse(p>=0.001 & p<0.01,"**",
+#                         ifelse(p>=0.01 & p<0.05,"*",
+#                                ifelse(p>=0.05 & p<0.1,".",""))))
+# # Affichage du resultat
+# ctable <- cbind(ctable, "p value" = p,"signif"=signif)
+# exp(cbind(OR = coef(mod_gain_mlo), confint(mod_gain_mlo)))
+
+suppressMessages(mod_gain_mlo %>% tbl_regression(intercept = TRUE,exponentiate=TRUE) %>% add_global_p())
+```
+
+
